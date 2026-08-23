@@ -7,7 +7,10 @@ const http = require("http");
 const { Server } = require("socket.io");
 const dns = require("dns");
 
-// MongoDB Atlas DNS
+// ==========================================
+// MONGODB ATLAS DNS
+// ==========================================
+
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 dotenv.config();
@@ -97,7 +100,10 @@ mongoose
     console.log("MongoDB connected");
   })
   .catch((error) => {
-    console.error("MongoDB connection error:", error);
+    console.error(
+      "MongoDB connection error:",
+      error
+    );
   });
 
 // ==========================================
@@ -105,82 +111,215 @@ mongoose
 // ==========================================
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log(
+    "User connected:",
+    socket.id
+  );
 
-  // Join private conversation
-  socket.on("join_private", ({ user1, user2 }) => {
-    const roomId = [user1, user2].sort().join("_");
+  // ========================================
+  // JOIN PRIVATE CONVERSATION
+  // ========================================
 
-    socket.join(roomId);
+  socket.on(
+    "join_private",
+    ({ user1, user2 }) => {
+      if (!user1 || !user2) {
+        return;
+      }
 
-    console.log(
-      `Socket ${socket.id} joined private room: ${roomId}`
-    );
-  });
+      const roomId = [
+        user1,
+        user2,
+      ]
+        .sort()
+        .join("_");
 
-  // Join group
-  socket.on("join_group", (groupId) => {
-    socket.join(groupId);
+      socket.join(roomId);
 
-    console.log(
-      `Socket ${socket.id} joined group: ${groupId}`
-    );
-  });
+      console.log(
+        `Socket ${socket.id} joined private room: ${roomId}`
+      );
+    }
+  );
 
-  // Private message
-  socket.on("private_message", (data) => {
-    const {
-      sender,
-      receiver,
-      message,
-      type = "text",
-      imageUrl = "",
-    } = data;
+  // ========================================
+  // JOIN GROUP
+  // ========================================
 
-    const roomId = [sender, receiver].sort().join("_");
+  socket.on(
+    "join_group",
+    (groupId) => {
+      if (!groupId) {
+        return;
+      }
 
-    io.to(roomId).emit("new_message", {
-      sender,
-      receiver,
-      message,
-      type,
-      imageUrl,
-      createdAt: new Date(),
-    });
-  });
+      socket.join(groupId);
 
-  // Group message
-  socket.on("group_message", (data) => {
-    const {
-      sender,
-      group,
-      message,
-      type = "text",
-      imageUrl = "",
-    } = data;
+      console.log(
+        `Socket ${socket.id} joined group: ${groupId}`
+      );
+    }
+  );
 
-    io.to(group).emit("new_group_message", {
-      sender,
-      group,
-      message,
-      type,
-      imageUrl,
-      createdAt: new Date(),
-    });
-  });
+  // ========================================
+  // PRIVATE MESSAGE
+  // ========================================
 
-  // Disconnect
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-  });
+  socket.on(
+    "private_message",
+    (data) => {
+      try {
+        const {
+          sender,
+          receiver,
+          message,
+          type = "text",
+          imageUrl = "",
+        } = data || {};
+
+        if (
+          !sender ||
+          !receiver
+        ) {
+          console.error(
+            "Invalid private message:",
+            data
+          );
+
+          return;
+        }
+
+        const roomId = [
+          sender,
+          receiver,
+        ]
+          .sort()
+          .join("_");
+
+        /*
+         * IMPORTANT:
+         *
+         * socket.to(roomId).emit()
+         * sends the message to every
+         * socket in the room EXCEPT
+         * the sender.
+         *
+         * The sender already adds the
+         * saved message to its own UI
+         * from the POST /private request.
+         */
+
+        socket
+          .to(roomId)
+          .emit("new_message", {
+            sender,
+            receiver,
+            message,
+            type,
+            imageUrl,
+            createdAt:
+              new Date(),
+          });
+
+        console.log(
+          `Private message sent to room: ${roomId}`
+        );
+      } catch (error) {
+        console.error(
+          "Private Socket.IO error:",
+          error
+        );
+      }
+    }
+  );
+
+  // ========================================
+  // GROUP MESSAGE
+  // ========================================
+
+  socket.on(
+    "group_message",
+    (data) => {
+      try {
+        const {
+          sender,
+          group,
+          message,
+          type = "text",
+          imageUrl = "",
+        } = data || {};
+
+        if (
+          !sender ||
+          !group
+        ) {
+          console.error(
+            "Invalid group message:",
+            data
+          );
+
+          return;
+        }
+
+        /*
+         * Send to everyone in the group
+         * EXCEPT the sender.
+         *
+         * The sender already adds the
+         * saved message locally.
+         */
+
+        socket
+          .to(group)
+          .emit(
+            "new_group_message",
+            {
+              sender,
+              group,
+              message,
+              type,
+              imageUrl,
+              createdAt:
+                new Date(),
+            }
+          );
+
+        console.log(
+          `Group message sent to group: ${group}`
+        );
+      } catch (error) {
+        console.error(
+          "Group Socket.IO error:",
+          error
+        );
+      }
+    }
+  );
+
+  // ========================================
+  // DISCONNECT
+  // ========================================
+
+  socket.on(
+    "disconnect",
+    (reason) => {
+      console.log(
+        `User disconnected: ${socket.id}`,
+        reason
+      );
+    }
+  );
 });
 
 // ==========================================
-// SERVERcc
+// SERVER
 // ==========================================
 
-const PORT = process.env.PORT || 5001;
+const PORT =
+  process.env.PORT || 5001;
 
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(
+    `Server running on port ${PORT}`
+  );
 });
