@@ -7,10 +7,11 @@ const http = require("http");
 const { Server } = require("socket.io");
 const dns = require("dns");
 
-// MongoDB Atlas DNS
-dns.setServers(["1.1.1.1", "8.8.8.8"]);
-
+// Load environment variables
 dotenv.config();
+
+// Use reliable DNS servers for MongoDB Atlas
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 const app = express();
 const server = http.createServer(app);
@@ -26,29 +27,36 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow requests without an origin
+      // such as Postman/server-to-server requests
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error(`CORS blocked for origin: ${origin}`)
+      );
+    },
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: true,
   })
 );
 
 // ==========================================
-// SOCKET.IO
-// ==========================================
-
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true,
-  },
-});
-
-// ==========================================
-// MIDDLEWARE
+// BODY PARSER
 // ==========================================
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ==========================================
+// STATIC UPLOADS
+// ==========================================
 
 app.use(
   "/uploads",
@@ -72,7 +80,8 @@ app.use("/api/groups", groupRoutes);
 // ==========================================
 
 app.get("/", (req, res) => {
-  res.json({
+  res.status(200).json({
+    success: true,
     message: "Messaging API is running",
   });
 });
@@ -83,32 +92,43 @@ app.get("/", (req, res) => {
 
 app.get("/health", (req, res) => {
   res.status(200).json({
+    success: true,
     status: "OK",
+    database:
+      mongoose.connection.readyState === 1
+        ? "connected"
+        : "disconnected",
   });
 });
-
-// ==========================================
-// MONGODB
-// ==========================================
-
-mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => {
-    console.log("MongoDB connected");
-  })
-  .catch((error) => {
-    console.error("MongoDB connection error:", error);
-  });
 
 // ==========================================
 // SOCKET.IO
 // ==========================================
 
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+// ==========================================
+// SOCKET CONNECTION
+// ==========================================
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // Join private conversation
+  // ------------------------------------------
+  // PRIVATE CHAT ROOM
+  // ------------------------------------------
+
   socket.on("join_private", ({ user1, user2 }) => {
+    if (!user1 || !user2) {
+      return;
+    }
+
     const roomId = [user1, user2].sort().join("_");
 
     socket.join(roomId);
@@ -118,8 +138,15 @@ io.on("connection", (socket) => {
     );
   });
 
-  // Join group
+  // ------------------------------------------
+  // GROUP CHAT ROOM
+  // ------------------------------------------
+
   socket.on("join_group", (groupId) => {
+    if (!groupId) {
+      return;
+    }
+
     socket.join(groupId);
 
     console.log(
@@ -127,7 +154,10 @@ io.on("connection", (socket) => {
     );
   });
 
-  // Private message
+  // ------------------------------------------
+  // PRIVATE MESSAGE
+  // ------------------------------------------
+
   socket.on("private_message", (data) => {
     const {
       sender,
@@ -135,21 +165,30 @@ io.on("connection", (socket) => {
       message,
       type = "text",
       imageUrl = "",
-    } = data;
+    } = data || {};
+
+    if (!sender || !receiver || !message) {
+      return;
+    }
 
     const roomId = [sender, receiver].sort().join("_");
 
-    io.to(roomId).emit("new_message", {
+    const messageData = {
       sender,
       receiver,
       message,
       type,
       imageUrl,
       createdAt: new Date(),
-    });
+    };
+
+    io.to(roomId).emit("new_message", messageData);
   });
 
-  // Group message
+  // ------------------------------------------
+  // GROUP MESSAGE
+  // ------------------------------------------
+
   socket.on("group_message", (data) => {
     const {
       sender,
@@ -157,30 +196,91 @@ io.on("connection", (socket) => {
       message,
       type = "text",
       imageUrl = "",
-    } = data;
+    } = data || {};
 
-    io.to(group).emit("new_group_message", {
+    if (!sender || !group || !message) {
+      return;
+    }
+
+    const messageData = {
       sender,
       group,
       message,
       type,
       imageUrl,
       createdAt: new Date(),
-    });
+    };
+
+    io.to(group).emit("new_group_message", messageData);
   });
 
-  // Disconnect
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
+  // ------------------------------------------
+  // DISCONNECT
+  // ------------------------------------------
+
+  socket.on("disconnect", (reason) => {
+    console.log(
+      `User disconnected: ${socket.id} (${reason})`
+    );
   });
 });
 
 // ==========================================
-// SERVERcc
+// MONGODB CONNECTION
+// ==========================================
+
+const connectDatabase = async () => {
+  try {
+    if (!process.env.MONGO_URI) {
+      throw new Error(
+        "MONGO_URI is not defined in environment variables."
+      );
+    }
+
+    if (mongoose.connection.readyState === 1) {
+      console.log("MongoDB already connected");
+      return;
+    }
+
+    await mongoose.connect(process.env.MONGO_URI);
+
+    console.log("MongoDB connected");
+  } catch (error) {
+    console.error(
+      "MongoDB connection error:",
+      error.message
+    );
+
+    process.exit(1);
+  }
+};
+
+// ==========================================
+// START SERVER
 // ==========================================
 
 const PORT = process.env.PORT || 5001;
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+const startServer = async () => {
+  await connectDatabase();
+
+  server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    console.log(`API: http://localhost:${PORT}`);
+    console.log(`Socket.IO: http://localhost:${PORT}`);
+  });
+};
+
+startServer();
+
+// ==========================================
+// ERROR HANDLING
+// ==========================================
+
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled Promise Rejection:", error);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
 });
