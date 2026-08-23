@@ -10,6 +10,10 @@ import { API_URL } from "./config";
 function App() {
   const socketRef = useRef(null);
 
+  // Keep the latest selected chat available
+  // inside Socket.IO event listeners.
+  const selectedChatRef = useRef(null);
+
   // =====================================================
   // AUTH
   // =====================================================
@@ -76,6 +80,14 @@ function App() {
   const [groupError, setGroupError] = useState("");
 
   // =====================================================
+  // KEEP SELECTED CHAT REF UPDATED
+  // =====================================================
+
+  useEffect(() => {
+    selectedChatRef.current = selectedChat;
+  }, [selectedChat]);
+
+  // =====================================================
   // LOGIN
   // =====================================================
 
@@ -106,7 +118,10 @@ function App() {
     localStorage.removeItem("currentUser");
 
     setCurrentUser(null);
+
     setSelectedChat(null);
+    selectedChatRef.current = null;
+
     setMessages([]);
     setUsers([]);
     setGroups([]);
@@ -199,19 +214,20 @@ function App() {
     }
 
     console.log(
-      "Connecting Socket.IO:",
-      API_URL
+      "Creating Socket.IO connection for:",
+      currentUser._id
     );
 
     const socket = io(API_URL, {
       transports: ["websocket", "polling"],
+      withCredentials: true,
     });
 
     socketRef.current = socket;
 
-    // =================================================
-    // CONNECT
-    // =================================================
+    // ===================================================
+    // SOCKET CONNECTED
+    // ===================================================
 
     socket.on("connect", () => {
       console.log(
@@ -219,14 +235,40 @@ function App() {
         socket.id
       );
 
+      // Register user
       socket.emit("register_user", {
         userId: currentUser._id,
       });
+
+      // Join currently selected chat if one exists
+      const chat = selectedChatRef.current;
+
+      if (chat?.type === "private" && chat.user?._id) {
+        socket.emit("join_private", {
+          user1: currentUser._id,
+          user2: chat.user._id,
+        });
+
+        console.log(
+          "Joined private chat after connection"
+        );
+      }
+
+      if (chat?.type === "group" && chat.group?._id) {
+        socket.emit(
+          "join_group",
+          chat.group._id
+        );
+
+        console.log(
+          "Joined group after connection"
+        );
+      }
     });
 
-    // =================================================
-    // DISCONNECT
-    // =================================================
+    // ===================================================
+    // SOCKET DISCONNECTED
+    // ===================================================
 
     socket.on("disconnect", (reason) => {
       console.log(
@@ -235,25 +277,32 @@ function App() {
       );
     });
 
-    // =================================================
+    // ===================================================
+    // SOCKET CONNECT ERROR
+    // ===================================================
+
+    socket.on("connect_error", (error) => {
+      console.error(
+        "Socket connection error:",
+        error
+      );
+    });
+
+    // ===================================================
     // PRIVATE MESSAGE
-    // =================================================
+    // ===================================================
 
     socket.on(
       "new_message",
       (newMessage) => {
         console.log(
-          "New private message:",
+          "New private message received:",
           newMessage
         );
 
         if (!newMessage) {
           return;
         }
-
-        // ---------------------------------------------
-        // Get sender / receiver IDs
-        // ---------------------------------------------
 
         const senderId =
           typeof newMessage.sender === "object"
@@ -265,40 +314,30 @@ function App() {
             ? newMessage.receiver?._id
             : newMessage.receiver;
 
-        // ---------------------------------------------
-        // Determine the other user
-        // ---------------------------------------------
-
-        const otherUserId =
-          String(senderId) ===
-          String(currentUser._id)
-            ? receiverId
-            : senderId;
-
-        // ---------------------------------------------
-        // Check whether message belongs to
-        // currently open conversation
-        // ---------------------------------------------
+        const chat =
+          selectedChatRef.current;
 
         const currentChatUserId =
-          selectedChat?.type === "private"
-            ? selectedChat.user?._id
+          chat?.type === "private"
+            ? chat.user?._id
             : null;
 
         const belongsToCurrentChat =
-          selectedChat?.type === "private" &&
-          String(otherUserId) ===
-            String(currentChatUserId);
+          chat?.type === "private" &&
+          (
+            String(senderId) ===
+              String(currentChatUserId) ||
+            String(receiverId) ===
+              String(currentChatUserId)
+          );
 
-        // ---------------------------------------------
-        // Add message ONLY ONCE
-        // ---------------------------------------------
+        // ===============================================
+        // ADD MESSAGE TO CURRENT CHAT
+        // ===============================================
 
         if (belongsToCurrentChat) {
           setMessages((previous) => {
-            // IMPORTANT:
-            // Prevent duplicate message
-
+            // Prevent duplicates
             if (
               newMessage._id &&
               previous.some(
@@ -317,31 +356,23 @@ function App() {
           });
         }
 
-        // ---------------------------------------------
+        // ===============================================
         // UNREAD MESSAGE
-        // ---------------------------------------------
+        // ===============================================
 
         if (
           senderId &&
           String(senderId) !==
             String(currentUser._id)
         ) {
-          const isCurrentChat =
-            currentChatUserId &&
-            String(currentChatUserId) ===
-              String(senderId);
-
-          if (!isCurrentChat) {
+          if (!belongsToCurrentChat) {
             setUnreadUsers((previous) => ({
               ...previous,
               [senderId]: true,
             }));
           }
 
-          // -------------------------------------------
           // Move sender to top
-          // -------------------------------------------
-
           setUsers((previous) => {
             const index = previous.findIndex(
               (user) =>
@@ -367,15 +398,15 @@ function App() {
       }
     );
 
-    // =================================================
+    // ===================================================
     // GROUP MESSAGE
-    // =================================================
+    // ===================================================
 
     socket.on(
       "new_group_message",
       (newMessage) => {
         console.log(
-          "New group message:",
+          "New group message received:",
           newMessage
         );
 
@@ -388,13 +419,16 @@ function App() {
             ? newMessage.group?._id
             : newMessage.group;
 
+        const chat =
+          selectedChatRef.current;
+
         const currentGroupId =
-          selectedChat?.type === "group"
-            ? selectedChat.group?._id
+          chat?.type === "group"
+            ? chat.group?._id
             : null;
 
         const belongsToCurrentGroup =
-          selectedChat?.type === "group" &&
+          chat?.type === "group" &&
           String(messageGroupId) ===
             String(currentGroupId);
 
@@ -402,11 +436,8 @@ function App() {
           return;
         }
 
-        // ---------------------------------------------
-        // Add group message only once
-        // ---------------------------------------------
-
         setMessages((previous) => {
+          // Prevent duplicates
           if (
             newMessage._id &&
             previous.some(
@@ -426,9 +457,9 @@ function App() {
       }
     );
 
-    // =================================================
+    // ===================================================
     // CLEANUP
-    // =================================================
+    // ===================================================
 
     return () => {
       console.log(
@@ -441,7 +472,7 @@ function App() {
         socketRef.current = null;
       }
     };
-  }, [currentUser, selectedChat]);
+  }, [currentUser]);
 
   // =====================================================
   // USER HELPERS
@@ -484,12 +515,8 @@ function App() {
     }
 
     if (
-      user.profilePhoto.startsWith(
-        "http://"
-      ) ||
-      user.profilePhoto.startsWith(
-        "https://"
-      )
+      user.profilePhoto.startsWith("http://") ||
+      user.profilePhoto.startsWith("https://")
     ) {
       return user.profilePhoto;
     }
@@ -548,10 +575,14 @@ function App() {
       return;
     }
 
-    setSelectedChat({
+    const chat = {
       type: "private",
       user,
-    });
+    };
+
+    setSelectedChat(chat);
+
+    selectedChatRef.current = chat;
 
     setMobileChatOpen(true);
 
@@ -561,10 +592,7 @@ function App() {
 
     setMessage("");
 
-    // ---------------------------------------------
     // Mark unread as read
-    // ---------------------------------------------
-
     setUnreadUsers((previous) => {
       const updated = {
         ...previous,
@@ -575,21 +603,30 @@ function App() {
       return updated;
     });
 
-    // ---------------------------------------------
-    // Join private room
-    // ---------------------------------------------
+    // ===============================================
+    // JOIN SOCKET ROOM
+    // ===============================================
 
-    socketRef.current?.emit(
-      "join_private",
-      {
-        user1: currentUser._id,
-        user2: user._id,
-      }
-    );
+    if (socketRef.current?.connected) {
+      socketRef.current.emit(
+        "join_private",
+        {
+          user1: currentUser._id,
+          user2: user._id,
+        }
+      );
 
-    // ---------------------------------------------
-    // Load existing messages
-    // ---------------------------------------------
+      console.log(
+        "Joined private room:",
+        [currentUser._id, user._id]
+          .sort()
+          .join("_")
+      );
+    }
+
+    // ===============================================
+    // LOAD OLD MESSAGES
+    // ===============================================
 
     try {
       const response = await fetch(
@@ -629,10 +666,14 @@ function App() {
       return;
     }
 
-    setSelectedChat({
+    const chat = {
       type: "group",
       group,
-    });
+    };
+
+    setSelectedChat(chat);
+
+    selectedChatRef.current = chat;
 
     setMobileChatOpen(true);
 
@@ -642,18 +683,25 @@ function App() {
 
     setMessage("");
 
-    // ---------------------------------------------
-    // Join group room
-    // ---------------------------------------------
+    // ===============================================
+    // JOIN GROUP SOCKET ROOM
+    // ===============================================
 
-    socketRef.current?.emit(
-      "join_group",
-      group._id
-    );
+    if (socketRef.current?.connected) {
+      socketRef.current.emit(
+        "join_group",
+        group._id
+      );
 
-    // ---------------------------------------------
-    // Load existing messages
-    // ---------------------------------------------
+      console.log(
+        "Joined group room:",
+        group._id
+      );
+    }
+
+    // ===============================================
+    // LOAD OLD MESSAGES
+    // ===============================================
 
     try {
       const response = await fetch(
@@ -693,6 +741,8 @@ function App() {
 
     setSelectedChat(null);
 
+    selectedChatRef.current = null;
+
     setMessages([]);
 
     setSelectedPhoto(null);
@@ -719,71 +769,69 @@ function App() {
     try {
       let response;
 
-      // =================================================
+      // ===============================================
       // PRIVATE MESSAGE
-      // =================================================
+      // ===============================================
 
       if (
         selectedChat.type ===
         "private"
       ) {
-        response =
-          await fetch(
-            `${API_URL}/api/messages/private`,
-            {
-              method: "POST",
+        response = await fetch(
+          `${API_URL}/api/messages/private`,
+          {
+            method: "POST",
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-              body: JSON.stringify({
-                sender:
-                  currentUser._id,
+            body: JSON.stringify({
+              sender:
+                currentUser._id,
 
-                receiver:
-                  selectedChat.user._id,
+              receiver:
+                selectedChat.user._id,
 
-                type: "text",
+              type: "text",
 
-                message:
-                  textToSend,
-              }),
-            }
-          );
+              message:
+                textToSend,
+            }),
+          }
+        );
       }
 
-      // =================================================
+      // ===============================================
       // GROUP MESSAGE
-      // =================================================
+      // ===============================================
 
       else {
-        response =
-          await fetch(
-            `${API_URL}/api/messages/group`,
-            {
-              method: "POST",
+        response = await fetch(
+          `${API_URL}/api/messages/group`,
+          {
+            method: "POST",
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-              body: JSON.stringify({
-                sender:
-                  currentUser._id,
+            body: JSON.stringify({
+              sender:
+                currentUser._id,
 
-                group:
-                  selectedChat.group._id,
+              group:
+                selectedChat.group._id,
 
-                type: "text",
+              type: "text",
 
-                message:
-                  textToSend,
-              }),
-            }
-          );
+              message:
+                textToSend,
+            }),
+          }
+        );
       }
 
       const data =
@@ -798,25 +846,38 @@ function App() {
         return;
       }
 
-      console.log(
-        "Message saved:",
-        data
-      );
+      // ===============================================
+      // ADD TO SENDER'S SCREEN
+      // ===============================================
 
-      // =================================================
-      // IMPORTANT
-      //
-      // DO NOT add `data` directly to messages here.
-      //
-      // Socket.IO will send it to both sender and receiver.
-      // Adding it here would create a duplicate on sender.
-      // =================================================
+      if (
+        data &&
+        typeof data === "object"
+      ) {
+        setMessages((previous) => {
+          if (
+            data._id &&
+            previous.some(
+              (item) =>
+                String(item?._id) ===
+                String(data._id)
+            )
+          ) {
+            return previous;
+          }
+
+          return [
+            ...previous,
+            data,
+          ];
+        });
+      }
 
       setMessage("");
 
-      // =================================================
-      // MOVE RECEIVER TO TOP
-      // =================================================
+      // ===============================================
+      // MOVE PRIVATE CHAT TO TOP
+      // ===============================================
 
       if (
         selectedChat.type ===
@@ -849,63 +910,72 @@ function App() {
         });
       }
 
-      // =================================================
-      // SOCKET.IO
-      // =================================================
+      // ===============================================
+      // SOCKET BROADCAST
+      //
+      // IMPORTANT:
+      // Send individual fields, NOT the whole
+      // MongoDB message object as "message".
+      // ===============================================
 
       if (
-        !socketRef.current?.connected
+        socketRef.current?.connected
       ) {
-        console.error(
-          "Socket is not connected"
+        if (
+          selectedChat.type ===
+          "private"
+        ) {
+          socketRef.current.emit(
+            "private_message",
+            {
+              sender:
+                currentUser._id,
+
+              receiver:
+                selectedChat.user._id,
+
+              message:
+                data.message ||
+                textToSend,
+
+              type:
+                data.type ||
+                "text",
+
+              imageUrl:
+                data.imageUrl ||
+                "",
+            }
+          );
+        } else {
+          socketRef.current.emit(
+            "group_message",
+            {
+              sender:
+                currentUser._id,
+
+              group:
+                selectedChat.group._id,
+
+              message:
+                data.message ||
+                textToSend,
+
+              type:
+                data.type ||
+                "text",
+
+              imageUrl:
+                data.imageUrl ||
+                "",
+            }
+          );
+        }
+      } else {
+        console.warn(
+          "Socket is not connected. Message was saved but not broadcast."
         );
-
-        return;
       }
-
-      // -----------------------------------------------
-      // PRIVATE
-      // -----------------------------------------------
-
-      if (
-        selectedChat.type ===
-        "private"
-      ) {
-        socketRef.current.emit(
-          "private_message",
-          {
-            sender:
-              currentUser._id,
-
-            receiver:
-              selectedChat.user._id,
-
-            // Send complete saved message
-            message: data,
-          }
-        );
-      }
-
-      // -----------------------------------------------
-      // GROUP
-      // -----------------------------------------------
-
-      else {
-        socketRef.current.emit(
-          "group_message",
-          {
-            sender:
-              currentUser._id,
-
-            group:
-              selectedChat.group._id,
-
-            // Send complete saved message
-            message: data,
-          }
-        );
-      }
-
     } catch (error) {
       console.error(
         "Send text error:",
@@ -929,9 +999,7 @@ function App() {
     }
 
     if (
-      !file.type.startsWith(
-        "image/"
-      )
+      !file.type.startsWith("image/")
     ) {
       alert(
         "Please select an image file."
@@ -970,10 +1038,6 @@ function App() {
     }
 
     try {
-      // =================================================
-      // UPLOAD IMAGE
-      // =================================================
-
       const formData =
         new FormData();
 
@@ -981,6 +1045,10 @@ function App() {
         "image",
         selectedPhoto
       );
+
+      // ===============================================
+      // UPLOAD IMAGE
+      // ===============================================
 
       const uploadResponse =
         await fetch(
@@ -1021,9 +1089,9 @@ function App() {
         return;
       }
 
-      // =================================================
+      // ===============================================
       // SAVE MESSAGE
-      // =================================================
+      // ===============================================
 
       let response;
 
@@ -1031,55 +1099,53 @@ function App() {
         selectedChat.type ===
         "private"
       ) {
-        response =
-          await fetch(
-            `${API_URL}/api/messages/private`,
-            {
-              method: "POST",
+        response = await fetch(
+          `${API_URL}/api/messages/private`,
+          {
+            method: "POST",
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-              body: JSON.stringify({
-                sender:
-                  currentUser._id,
+            body: JSON.stringify({
+              sender:
+                currentUser._id,
 
-                receiver:
-                  selectedChat.user._id,
+              receiver:
+                selectedChat.user._id,
 
-                type: "image",
+              type: "image",
 
-                imageUrl,
-              }),
-            }
-          );
+              imageUrl,
+            }),
+          }
+        );
       } else {
-        response =
-          await fetch(
-            `${API_URL}/api/messages/group`,
-            {
-              method: "POST",
+        response = await fetch(
+          `${API_URL}/api/messages/group`,
+          {
+            method: "POST",
 
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
 
-              body: JSON.stringify({
-                sender:
-                  currentUser._id,
+            body: JSON.stringify({
+              sender:
+                currentUser._id,
 
-                group:
-                  selectedChat.group._id,
+              group:
+                selectedChat.group._id,
 
-                type: "image",
+              type: "image",
 
-                imageUrl,
-              }),
-            }
-          );
+              imageUrl,
+            }),
+          }
+        );
       }
 
       const data =
@@ -1094,75 +1160,97 @@ function App() {
         return;
       }
 
-      console.log(
-        "Image message saved:",
-        data
-      );
+      // ===============================================
+      // ADD IMAGE TO SENDER'S SCREEN
+      // ===============================================
 
-      // =================================================
-      // IMPORTANT
-      //
-      // Do NOT add data directly to messages.
-      // Socket.IO will do that.
-      // =================================================
+      if (
+        data &&
+        typeof data === "object"
+      ) {
+        setMessages((previous) => {
+          if (
+            data._id &&
+            previous.some(
+              (item) =>
+                String(item?._id) ===
+                String(data._id)
+            )
+          ) {
+            return previous;
+          }
+
+          return [
+            ...previous,
+            data,
+          ];
+        });
+      }
 
       setSelectedPhoto(null);
 
-      // =================================================
-      // SOCKET.IO
-      // =================================================
+      // ===============================================
+      // SOCKET BROADCAST
+      // ===============================================
 
       if (
-        !socketRef.current?.connected
+        socketRef.current?.connected
       ) {
-        console.error(
-          "Socket is not connected"
+        if (
+          selectedChat.type ===
+          "private"
+        ) {
+          socketRef.current.emit(
+            "private_message",
+            {
+              sender:
+                currentUser._id,
+
+              receiver:
+                selectedChat.user._id,
+
+              message:
+                data.message ||
+                "",
+
+              type:
+                data.type ||
+                "image",
+
+              imageUrl:
+                data.imageUrl ||
+                imageUrl,
+            }
+          );
+        } else {
+          socketRef.current.emit(
+            "group_message",
+            {
+              sender:
+                currentUser._id,
+
+              group:
+                selectedChat.group._id,
+
+              message:
+                data.message ||
+                "",
+
+              type:
+                data.type ||
+                "image",
+
+              imageUrl:
+                data.imageUrl ||
+                imageUrl,
+            }
+          );
+        }
+      } else {
+        console.warn(
+          "Socket is not connected. Image was saved but not broadcast."
         );
-
-        return;
       }
-
-      // -----------------------------------------------
-      // PRIVATE
-      // -----------------------------------------------
-
-      if (
-        selectedChat.type ===
-        "private"
-      ) {
-        socketRef.current.emit(
-          "private_message",
-          {
-            sender:
-              currentUser._id,
-
-            receiver:
-              selectedChat.user._id,
-
-            message: data,
-          }
-        );
-      }
-
-      // -----------------------------------------------
-      // GROUP
-      // -----------------------------------------------
-
-      else {
-        socketRef.current.emit(
-          "group_message",
-          {
-            sender:
-              currentUser._id,
-
-            group:
-              selectedChat.group._id,
-
-            message: data,
-          }
-        );
-      }
-
     } catch (error) {
       console.error(
         "Image send error:",
@@ -1264,7 +1352,6 @@ function App() {
       setShowGroupModal(false);
 
       openGroupChat(newGroup);
-
     } catch (error) {
       console.error(
         "Create group error:",
@@ -1274,7 +1361,6 @@ function App() {
       setGroupError(
         "Could not connect to the server."
       );
-
     } finally {
       setCreatingGroup(false);
     }
@@ -1458,14 +1544,9 @@ function App() {
               className="create-group-button"
               onClick={() => {
                 setGroupError("");
-
                 setGroupName("");
-
                 setSelectedMembers([]);
-
-                setShowGroupModal(
-                  true
-                );
+                setShowGroupModal(true);
               }}
             >
               + Create
@@ -1497,7 +1578,8 @@ function App() {
                     {Array.isArray(
                       group.members
                     )
-                      ? group.members.length
+                      ? group.members
+                          .length
                       : 0}{" "}
                     members
                   </span>
@@ -1807,9 +1889,7 @@ function App() {
               event.target ===
               event.currentTarget
             ) {
-              setShowGroupModal(
-                false
-              );
+              setShowGroupModal(false);
             }
           }}
         >
@@ -1936,15 +2016,11 @@ function App() {
               </div>
             </div>
 
-            {/* GROUP ERROR */}
-
             {groupError && (
               <div className="auth-message">
                 {groupError}
               </div>
             )}
-
-            {/* SELECTED COUNT */}
 
             <div className="selected-count">
               {selectedMembers.length}{" "}
@@ -1960,8 +2036,6 @@ function App() {
                 be added as the admin.
               </span>
             </div>
-
-            {/* MODAL ACTIONS */}
 
             <div className="modal-actions">
               <button
