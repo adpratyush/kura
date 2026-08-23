@@ -15,23 +15,50 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO
+// ==========================================
+// CORS
+// ==========================================
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  })
+);
+
+// ==========================================
+// SOCKET.IO
+// ==========================================
+
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-// Middleware
-app.use(cors());
+// ==========================================
+// MIDDLEWARE
+// ==========================================
+
 app.use(express.json());
+
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"))
 );
 
-// Routes
+// ==========================================
+// ROUTES
+// ==========================================
+
 const userRoutes = require("./routes/users");
 const messageRoutes = require("./routes/messages");
 const groupRoutes = require("./routes/groups");
@@ -40,14 +67,30 @@ app.use("/api/users", userRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/groups", groupRoutes);
 
-// Basic API test
+// ==========================================
+// BASIC API TEST
+// ==========================================
+
 app.get("/", (req, res) => {
   res.json({
     message: "Messaging API is running",
   });
 });
 
-// MongoDB
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+  });
+});
+
+// ==========================================
+// MONGODB
+// ==========================================
+
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => {
@@ -64,23 +107,27 @@ mongoose
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // Join a private conversation
+  // Join private conversation
   socket.on("join_private", ({ user1, user2 }) => {
     const roomId = [user1, user2].sort().join("_");
 
     socket.join(roomId);
 
-    console.log(`Socket ${socket.id} joined private room: ${roomId}`);
+    console.log(
+      `Socket ${socket.id} joined private room: ${roomId}`
+    );
   });
 
-  // Join a group
+  // Join group
   socket.on("join_group", (groupId) => {
     socket.join(groupId);
 
-    console.log(`Socket ${socket.id} joined group: ${groupId}`);
+    console.log(
+      `Socket ${socket.id} joined group: ${groupId}`
+    );
   });
 
-  // Send private message
+  // Private message
   socket.on("private_message", (data) => {
     const {
       sender,
@@ -102,7 +149,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Send group message
+  // Group message
   socket.on("group_message", (data) => {
     const {
       sender,

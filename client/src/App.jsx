@@ -5,7 +5,7 @@ import "./App.css";
 import Login from "./Login";
 import Register from "./Register";
 
-const API_URL = "http://localhost:5001";
+import { API_URL } from "./config";
 
 function App() {
   const socketRef = useRef(null);
@@ -904,7 +904,7 @@ function App() {
 
       const uploadResponse =
         await fetch(
-          `${API_URL}/api/upload`,
+          `${API_URL}/api/messages/upload-image`,
           {
             method: "POST",
             body: formData,
