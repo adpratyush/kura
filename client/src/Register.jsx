@@ -1,5 +1,4 @@
 import { useState } from "react";
-
 import { API_URL } from "./config";
 
 function Register({ onLogin }) {
@@ -9,6 +8,76 @@ function Register({ onLogin }) {
   const [photo, setPhoto] = useState(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Compress and resize image before uploading
+  const compressImage = (file) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+
+        const maxWidth = 1000;
+        const maxHeight = 1000;
+
+        let width = img.width;
+        let height = img.height;
+
+        // Resize while maintaining aspect ratio
+        if (width > maxWidth || height > maxHeight) {
+          const ratio = Math.min(
+            maxWidth / width,
+            maxHeight / height
+          );
+
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext("2d");
+
+        ctx.drawImage(
+          img,
+          0,
+          0,
+          width,
+          height
+        );
+
+        // Convert to compressed JPEG
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              reject(new Error("Image compression failed"));
+              return;
+            }
+
+            const compressedFile = new File(
+              [blob],
+              "profile.jpg",
+              {
+                type: "image/jpeg",
+                lastModified: Date.now(),
+              }
+            );
+
+            resolve(compressedFile);
+          },
+          "image/jpeg",
+          0.8
+        );
+      };
+
+      img.onerror = () => {
+        reject(new Error("Could not load image"));
+      };
+
+      img.src = URL.createObjectURL(file);
+    });
+  };
 
   const handleRegister = async (event) => {
     event.preventDefault();
@@ -23,8 +92,14 @@ function Register({ onLogin }) {
       formData.append("username", username);
       formData.append("password", password);
 
+      // Compress profile photo before uploading
       if (photo) {
-        formData.append("profilePhoto", photo);
+        const compressedPhoto = await compressImage(photo);
+
+        formData.append(
+          "profilePhoto",
+          compressedPhoto
+        );
       }
 
       const response = await fetch(
@@ -35,21 +110,41 @@ function Register({ onLogin }) {
         }
       );
 
-      const data = await response.json();
+      const contentType =
+        response.headers.get("content-type");
+
+      let data = {};
+
+      if (
+        contentType &&
+        contentType.includes("application/json")
+      ) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        console.error("Server response:", text);
+      }
 
       if (!response.ok) {
-        setMessage(data.message || "Registration failed");
+        setMessage(
+          data.message || "Registration failed"
+        );
         return;
       }
 
-      setMessage("Account created successfully!");
+      setMessage(
+        "Account created successfully!"
+      );
 
-      // Automatically log the user in
+      // Automatically log user in
       onLogin(data.user);
 
     } catch (error) {
-      console.error(error);
-      setMessage("Could not connect to the server");
+      console.error("Registration error:", error);
+
+      setMessage(
+        "Could not upload profile photo"
+      );
     } finally {
       setLoading(false);
     }
@@ -89,9 +184,14 @@ function Register({ onLogin }) {
               <input
                 type="file"
                 accept="image/*"
-                onChange={(event) =>
-                  setPhoto(event.target.files[0])
-                }
+                onChange={(event) => {
+                  const selectedFile =
+                    event.target.files[0];
+
+                  if (selectedFile) {
+                    setPhoto(selectedFile);
+                  }
+                }}
               />
             </label>
 
@@ -151,7 +251,9 @@ function Register({ onLogin }) {
             className="auth-button"
             disabled={loading}
           >
-            {loading ? "Creating..." : "Create Account"}
+            {loading
+              ? "Creating..."
+              : "Create Account"}
           </button>
 
         </form>
