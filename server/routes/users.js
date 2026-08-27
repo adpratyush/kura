@@ -1,42 +1,29 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 
+const cloudinary = require("../config/cloudinary");
 const User = require("../models/User");
 
 const router = express.Router();
 
 // ==========================================
-// PROFILE PHOTO UPLOAD
+// PROFILE PHOTO UPLOAD - CLOUDINARY
 // ==========================================
 
-const uploadDir = path.join(__dirname, "../uploads/profiles");
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
 
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, {
-    recursive: true,
-  });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadDir);
-  },
-
-  filename: (req, file, cb) => {
-    const extension = path.extname(file.originalname);
-
-    cb(
-      null,
-      `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`
-    );
+  params: {
+    folder: "kura/profiles",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
   },
 });
 
 const upload = multer({
   storage,
+
   limits: {
     fileSize: 5 * 1024 * 1024,
   },
@@ -54,68 +41,87 @@ const upload = multer({
 // REGISTER
 // ==========================================
 
-router.post("/register", upload.single("profilePhoto"), async (req, res) => {
-  try {
-    const { name, username, password } = req.body;
+router.post(
+  "/register",
+  upload.single("profilePhoto"),
+  async (req, res) => {
+    try {
+      const { name, username, password } = req.body;
 
-    if (!name || !username || !password) {
-      return res.status(400).json({
-        message: "Name, username and password are required",
+      if (!name || !username || !password) {
+        return res.status(400).json({
+          message: "Name, username and password are required",
+        });
+      }
+
+      if (password.length < 6) {
+        return res.status(400).json({
+          message: "Password must be at least 6 characters",
+        });
+      }
+
+      const cleanUsername = username.trim().toLowerCase();
+
+      const existingUser = await User.findOne({
+        username: cleanUsername,
+      });
+
+      if (existingUser) {
+        return res.status(400).json({
+          message: "Username already exists",
+        });
+      }
+
+      // ==========================================
+      // HASH PASSWORD
+      // ==========================================
+
+      const hashedPassword = await bcrypt.hash(password, 10);
+
+      // ==========================================
+      // CLOUDINARY PROFILE PHOTO
+      // ==========================================
+
+      let profilePhoto = "";
+
+      if (req.file) {
+        profilePhoto = req.file.path;
+      }
+
+      // ==========================================
+      // CREATE USER
+      // ==========================================
+
+      const user = await User.create({
+        name: name.trim(),
+        username: cleanUsername,
+        password: hashedPassword,
+        profilePhoto,
+      });
+
+      // ==========================================
+      // RESPONSE
+      // ==========================================
+
+      res.status(201).json({
+        message: "User registered successfully",
+
+        user: {
+          _id: user._id,
+          name: user.name,
+          username: user.username,
+          profilePhoto: user.profilePhoto,
+        },
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+
+      res.status(500).json({
+        message: "Server error",
       });
     }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        message: "Password must be at least 6 characters",
-      });
-    }
-
-    const cleanUsername = username.trim().toLowerCase();
-
-    const existingUser = await User.findOne({
-      username: cleanUsername,
-    });
-
-    if (existingUser) {
-      return res.status(400).json({
-        message: "Username already exists",
-      });
-    }
-
-    // Hash the password before saving
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    let profilePhoto = "";
-
-    if (req.file) {
-      profilePhoto = `/uploads/profiles/${req.file.filename}`;
-    }
-
-    const user = await User.create({
-      name: name.trim(),
-      username: cleanUsername,
-      password: hashedPassword,
-      profilePhoto,
-    });
-
-    res.status(201).json({
-      message: "User registered successfully",
-
-      user: {
-        _id: user._id,
-        name: user.name,
-        username: user.username,
-        profilePhoto: user.profilePhoto,
-      },
-    });
-  } catch (error) {
-    console.error("Registration error:", error);
-
-    res.status(500).json({
-      message: "Server error",
-    });
   }
-});
+);
 
 // ==========================================
 // LOGIN
