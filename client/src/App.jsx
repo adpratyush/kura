@@ -10,9 +10,10 @@ import { API_URL } from "./config";
 function App() {
   const socketRef = useRef(null);
 
-  // Keep the latest selected chat available
-  // inside Socket.IO event listeners.
   const selectedChatRef = useRef(null);
+
+  // Prevent accidental double sending
+  const sendingMessageRef = useRef(false);
 
   // =====================================================
   // AUTH
@@ -46,11 +47,9 @@ function App() {
   const [groups, setGroups] = useState([]);
 
   const [selectedChat, setSelectedChat] = useState(null);
-
   const [messages, setMessages] = useState([]);
 
   const [message, setMessage] = useState("");
-
   const [selectedPhoto, setSelectedPhoto] = useState(null);
 
   // =====================================================
@@ -64,6 +63,7 @@ function App() {
   // =====================================================
 
   const [unreadUsers, setUnreadUsers] = useState({});
+  const [unreadGroups, setUnreadGroups] = useState({});
 
   // =====================================================
   // GROUP CREATION
@@ -72,11 +72,9 @@ function App() {
   const [showGroupModal, setShowGroupModal] = useState(false);
 
   const [groupName, setGroupName] = useState("");
-
   const [selectedMembers, setSelectedMembers] = useState([]);
 
   const [creatingGroup, setCreatingGroup] = useState(false);
-
   const [groupError, setGroupError] = useState("");
 
   // =====================================================
@@ -125,10 +123,74 @@ function App() {
     setMessages([]);
     setUsers([]);
     setGroups([]);
+
     setMessage("");
     setSelectedPhoto(null);
+
     setUnreadUsers({});
+    setUnreadGroups({});
+
     setMobileChatOpen(false);
+  };
+
+  // =====================================================
+  // MOVE USER TO TOP
+  // =====================================================
+
+  const moveUserToTop = (userId) => {
+    if (!userId) {
+      return;
+    }
+
+    setUsers((previous) => {
+      const index = previous.findIndex(
+        (user) =>
+          String(user?._id) === String(userId)
+      );
+
+      if (index === -1) {
+        return previous;
+      }
+
+      const user = previous[index];
+
+      return [
+        user,
+        ...previous.filter(
+          (_, i) => i !== index
+        ),
+      ];
+    });
+  };
+
+  // =====================================================
+  // MOVE GROUP TO TOP
+  // =====================================================
+
+  const moveGroupToTop = (groupId) => {
+    if (!groupId) {
+      return;
+    }
+
+    setGroups((previous) => {
+      const index = previous.findIndex(
+        (group) =>
+          String(group?._id) === String(groupId)
+      );
+
+      if (index === -1) {
+        return previous;
+      }
+
+      const group = previous[index];
+
+      return [
+        group,
+        ...previous.filter(
+          (_, i) => i !== index
+        ),
+      ];
+    });
   };
 
   // =====================================================
@@ -161,7 +223,6 @@ function App() {
       })
       .catch((error) => {
         console.error("Users error:", error);
-
         setUsers([]);
       });
   }, [currentUser]);
@@ -226,7 +287,7 @@ function App() {
     socketRef.current = socket;
 
     // ===================================================
-    // SOCKET CONNECTED
+    // CONNECT
     // ===================================================
 
     socket.on("connect", () => {
@@ -235,39 +296,35 @@ function App() {
         socket.id
       );
 
-      // Register user
       socket.emit("register_user", {
         userId: currentUser._id,
       });
 
-      // Join currently selected chat if one exists
       const chat = selectedChatRef.current;
 
-      if (chat?.type === "private" && chat.user?._id) {
+      if (
+        chat?.type === "private" &&
+        chat.user?._id
+      ) {
         socket.emit("join_private", {
           user1: currentUser._id,
           user2: chat.user._id,
         });
-
-        console.log(
-          "Joined private chat after connection"
-        );
       }
 
-      if (chat?.type === "group" && chat.group?._id) {
+      if (
+        chat?.type === "group" &&
+        chat.group?._id
+      ) {
         socket.emit(
           "join_group",
           chat.group._id
-        );
-
-        console.log(
-          "Joined group after connection"
         );
       }
     });
 
     // ===================================================
-    // SOCKET DISCONNECTED
+    // DISCONNECT
     // ===================================================
 
     socket.on("disconnect", (reason) => {
@@ -278,7 +335,7 @@ function App() {
     });
 
     // ===================================================
-    // SOCKET CONNECT ERROR
+    // CONNECTION ERROR
     // ===================================================
 
     socket.on("connect_error", (error) => {
@@ -296,7 +353,7 @@ function App() {
       "new_message",
       (newMessage) => {
         console.log(
-          "New private message received:",
+          "New private message:",
           newMessage
         );
 
@@ -313,6 +370,36 @@ function App() {
           typeof newMessage.receiver === "object"
             ? newMessage.receiver?._id
             : newMessage.receiver;
+
+        const messageId =
+          newMessage._id;
+
+        // =============================================
+        // Ignore invalid message
+        // =============================================
+
+        if (!senderId || !receiverId) {
+          return;
+        }
+
+        // =============================================
+        // Ignore duplicate message
+        // =============================================
+
+        setMessages((previous) => {
+          if (
+            messageId &&
+            previous.some(
+              (item) =>
+                String(item?._id) ===
+                String(messageId)
+            )
+          ) {
+            return previous;
+          }
+
+          return previous;
+        });
 
         const chat =
           selectedChatRef.current;
@@ -331,21 +418,49 @@ function App() {
               String(currentChatUserId)
           );
 
-        // ===============================================
-        // ADD MESSAGE TO CURRENT CHAT
-        // ===============================================
+        // =============================================
+        // ADD TO CURRENT CHAT
+        // =============================================
 
         if (belongsToCurrentChat) {
           setMessages((previous) => {
-            // Prevent duplicates
+            // Strong duplicate protection
             if (
-              newMessage._id &&
+              messageId &&
               previous.some(
                 (item) =>
                   String(item?._id) ===
-                  String(newMessage._id)
+                  String(messageId)
               )
             ) {
+              return previous;
+            }
+
+            // Prevent duplicate temporary
+            // messages with same content
+            const duplicateContent =
+              previous.some(
+                (item) =>
+                  String(
+                    typeof item.sender === "object"
+                      ? item.sender?._id
+                      : item.sender
+                  ) === String(senderId) &&
+                  item.message ===
+                    newMessage.message &&
+                  item.type ===
+                    newMessage.type &&
+                  Math.abs(
+                    new Date(
+                      item.createdAt || 0
+                    ).getTime() -
+                      new Date(
+                        newMessage.createdAt || 0
+                      ).getTime()
+                  ) < 3000
+              );
+
+            if (duplicateContent) {
               return previous;
             }
 
@@ -356,15 +471,18 @@ function App() {
           });
         }
 
-        // ===============================================
-        // UNREAD MESSAGE
-        // ===============================================
+        // =============================================
+        // IF RECEIVER
+        // =============================================
 
         if (
-          senderId &&
           String(senderId) !==
-            String(currentUser._id)
+          String(currentUser._id)
         ) {
+          // ===========================================
+          // HIGHLIGHT UNREAD USER
+          // ===========================================
+
           if (!belongsToCurrentChat) {
             setUnreadUsers((previous) => ({
               ...previous,
@@ -372,28 +490,11 @@ function App() {
             }));
           }
 
-          // Move sender to top
-          setUsers((previous) => {
-            const index = previous.findIndex(
-              (user) =>
-                String(user?._id) ===
-                String(senderId)
-            );
+          // ===========================================
+          // MOVE SENDER TO TOP
+          // ===========================================
 
-            if (index === -1) {
-              return previous;
-            }
-
-            const senderUser =
-              previous[index];
-
-            return [
-              senderUser,
-              ...previous.filter(
-                (_, i) => i !== index
-              ),
-            ];
-          });
+          moveUserToTop(senderId);
         }
       }
     );
@@ -406,7 +507,7 @@ function App() {
       "new_group_message",
       (newMessage) => {
         console.log(
-          "New group message received:",
+          "New group message:",
           newMessage
         );
 
@@ -414,10 +515,22 @@ function App() {
           return;
         }
 
-        const messageGroupId =
+        const senderId =
+          typeof newMessage.sender === "object"
+            ? newMessage.sender?._id
+            : newMessage.sender;
+
+        const groupId =
           typeof newMessage.group === "object"
             ? newMessage.group?._id
             : newMessage.group;
+
+        const messageId =
+          newMessage._id;
+
+        if (!groupId) {
+          return;
+        }
 
         const chat =
           selectedChatRef.current;
@@ -429,31 +542,82 @@ function App() {
 
         const belongsToCurrentGroup =
           chat?.type === "group" &&
-          String(messageGroupId) ===
+          String(groupId) ===
             String(currentGroupId);
 
-        if (!belongsToCurrentGroup) {
-          return;
+        // =============================================
+        // ADD TO CURRENT GROUP
+        // =============================================
+
+        if (belongsToCurrentGroup) {
+          setMessages((previous) => {
+            // ID duplicate protection
+            if (
+              messageId &&
+              previous.some(
+                (item) =>
+                  String(item?._id) ===
+                  String(messageId)
+              )
+            ) {
+              return previous;
+            }
+
+            // Content duplicate protection
+            const duplicateContent =
+              previous.some(
+                (item) =>
+                  String(
+                    typeof item.sender === "object"
+                      ? item.sender?._id
+                      : item.sender
+                  ) === String(senderId) &&
+                  item.message ===
+                    newMessage.message &&
+                  item.type ===
+                    newMessage.type &&
+                  Math.abs(
+                    new Date(
+                      item.createdAt || 0
+                    ).getTime() -
+                      new Date(
+                        newMessage.createdAt || 0
+                      ).getTime()
+                  ) < 3000
+              );
+
+            if (duplicateContent) {
+              return previous;
+            }
+
+            return [
+              ...previous,
+              newMessage,
+            ];
+          });
         }
 
-        setMessages((previous) => {
-          // Prevent duplicates
-          if (
-            newMessage._id &&
-            previous.some(
-              (item) =>
-                String(item?._id) ===
-                String(newMessage._id)
-            )
-          ) {
-            return previous;
+        // =============================================
+        // RECEIVED GROUP MESSAGE
+        // =============================================
+
+        if (
+          String(senderId) !==
+          String(currentUser._id)
+        ) {
+          if (!belongsToCurrentGroup) {
+            setUnreadGroups((previous) => ({
+              ...previous,
+              [groupId]: true,
+            }));
           }
 
-          return [
-            ...previous,
-            newMessage,
-          ];
-        });
+          // ===========================================
+          // MOVE GROUP TO TOP
+          // ===========================================
+
+          moveGroupToTop(groupId);
+        }
       }
     );
 
@@ -468,7 +632,9 @@ function App() {
 
       socket.disconnect();
 
-      if (socketRef.current === socket) {
+      if (
+        socketRef.current === socket
+      ) {
         socketRef.current = null;
       }
     };
@@ -501,6 +667,10 @@ function App() {
       .charAt(0)
       .toUpperCase();
   };
+
+  // =====================================================
+  // PHOTO URL
+  // =====================================================
 
   const getPhotoUrl = (user) => {
     if (
@@ -546,7 +716,9 @@ function App() {
     const photo = getPhotoUrl(user);
 
     return (
-      <div className={`avatar ${size}`}>
+      <div
+        className={`avatar ${size}`}
+      >
         {photo ? (
           <img
             src={photo}
@@ -592,7 +764,7 @@ function App() {
 
     setMessage("");
 
-    // Mark unread as read
+    // Remove unread highlight
     setUnreadUsers((previous) => {
       const updated = {
         ...previous,
@@ -604,23 +776,20 @@ function App() {
     });
 
     // ===============================================
-    // JOIN SOCKET ROOM
+    // JOIN ROOM
     // ===============================================
 
-    if (socketRef.current?.connected) {
+    if (
+      socketRef.current?.connected
+    ) {
       socketRef.current.emit(
         "join_private",
         {
-          user1: currentUser._id,
-          user2: user._id,
+          user1:
+            currentUser._id,
+          user2:
+            user._id,
         }
-      );
-
-      console.log(
-        "Joined private room:",
-        [currentUser._id, user._id]
-          .sort()
-          .join("_")
       );
     }
 
@@ -629,11 +798,13 @@ function App() {
     // ===============================================
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/messages/private/${currentUser._id}/${user._id}`
-      );
+      const response =
+        await fetch(
+          `${API_URL}/api/messages/private/${currentUser._id}/${user._id}`
+        );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -683,18 +854,26 @@ function App() {
 
     setMessage("");
 
+    // Remove unread group highlight
+    setUnreadGroups((previous) => {
+      const updated = {
+        ...previous,
+      };
+
+      delete updated[group._id];
+
+      return updated;
+    });
+
     // ===============================================
-    // JOIN GROUP SOCKET ROOM
+    // JOIN GROUP
     // ===============================================
 
-    if (socketRef.current?.connected) {
+    if (
+      socketRef.current?.connected
+    ) {
       socketRef.current.emit(
         "join_group",
-        group._id
-      );
-
-      console.log(
-        "Joined group room:",
         group._id
       );
     }
@@ -704,11 +883,13 @@ function App() {
     // ===============================================
 
     try {
-      const response = await fetch(
-        `${API_URL}/api/messages/group/${group._id}`
-      );
+      const response =
+        await fetch(
+          `${API_URL}/api/messages/group/${group._id}`
+        );
 
-      const data = await response.json();
+      const data =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -733,7 +914,7 @@ function App() {
   };
 
   // =====================================================
-  // BACK TO SIDEBAR - MOBILE
+  // CLOSE MOBILE CHAT
   // =====================================================
 
   const closeMobileChat = () => {
@@ -763,6 +944,13 @@ function App() {
       return;
     }
 
+    // Prevent double click / Enter + click
+    if (sendingMessageRef.current) {
+      return;
+    }
+
+    sendingMessageRef.current = true;
+
     const textToSend =
       message.trim();
 
@@ -770,68 +958,72 @@ function App() {
       let response;
 
       // ===============================================
-      // PRIVATE MESSAGE
+      // PRIVATE
       // ===============================================
 
       if (
         selectedChat.type ===
         "private"
       ) {
-        response = await fetch(
-          `${API_URL}/api/messages/private`,
-          {
-            method: "POST",
+        response =
+          await fetch(
+            `${API_URL}/api/messages/private`,
+            {
+              method: "POST",
 
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
 
-            body: JSON.stringify({
-              sender:
-                currentUser._id,
+              body: JSON.stringify({
+                sender:
+                  currentUser._id,
 
-              receiver:
-                selectedChat.user._id,
+                receiver:
+                  selectedChat
+                    .user._id,
 
-              type: "text",
+                type: "text",
 
-              message:
-                textToSend,
-            }),
-          }
-        );
+                message:
+                  textToSend,
+              }),
+            }
+          );
       }
 
       // ===============================================
-      // GROUP MESSAGE
+      // GROUP
       // ===============================================
 
       else {
-        response = await fetch(
-          `${API_URL}/api/messages/group`,
-          {
-            method: "POST",
+        response =
+          await fetch(
+            `${API_URL}/api/messages/group`,
+            {
+              method: "POST",
 
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
 
-            body: JSON.stringify({
-              sender:
-                currentUser._id,
+              body: JSON.stringify({
+                sender:
+                  currentUser._id,
 
-              group:
-                selectedChat.group._id,
+                group:
+                  selectedChat
+                    .group._id,
 
-              type: "text",
+                type: "text",
 
-              message:
-                textToSend,
-            }),
-          }
-        );
+                message:
+                  textToSend,
+              }),
+            }
+          );
       }
 
       const data =
@@ -847,7 +1039,7 @@ function App() {
       }
 
       // ===============================================
-      // ADD TO SENDER'S SCREEN
+      // ADD SAVED MESSAGE TO SENDER
       // ===============================================
 
       if (
@@ -883,39 +1075,30 @@ function App() {
         selectedChat.type ===
         "private"
       ) {
-        const receiverId =
-          selectedChat.user._id;
+        moveUserToTop(
+          selectedChat.user._id
+        );
+      }
 
-        setUsers((previous) => {
-          const index =
-            previous.findIndex(
-              (user) =>
-                String(user?._id) ===
-                String(receiverId)
-            );
+      // ===============================================
+      // MOVE GROUP TO TOP
+      // ===============================================
 
-          if (index === -1) {
-            return previous;
-          }
-
-          const user =
-            previous[index];
-
-          return [
-            user,
-            ...previous.filter(
-              (_, i) => i !== index
-            ),
-          ];
-        });
+      if (
+        selectedChat.type ===
+        "group"
+      ) {
+        moveGroupToTop(
+          selectedChat.group._id
+        );
       }
 
       // ===============================================
       // SOCKET BROADCAST
       //
       // IMPORTANT:
-      // Send individual fields, NOT the whole
-      // MongoDB message object as "message".
+      // Include the MongoDB _id returned
+      // by the API.
       // ===============================================
 
       if (
@@ -928,11 +1111,15 @@ function App() {
           socketRef.current.emit(
             "private_message",
             {
+              _id:
+                data._id,
+
               sender:
                 currentUser._id,
 
               receiver:
-                selectedChat.user._id,
+                selectedChat
+                  .user._id,
 
               message:
                 data.message ||
@@ -945,17 +1132,25 @@ function App() {
               imageUrl:
                 data.imageUrl ||
                 "",
+
+              createdAt:
+                data.createdAt ||
+                new Date(),
             }
           );
         } else {
           socketRef.current.emit(
             "group_message",
             {
+              _id:
+                data._id,
+
               sender:
                 currentUser._id,
 
               group:
-                selectedChat.group._id,
+                selectedChat
+                  .group._id,
 
               message:
                 data.message ||
@@ -968,19 +1163,21 @@ function App() {
               imageUrl:
                 data.imageUrl ||
                 "",
+
+              createdAt:
+                data.createdAt ||
+                new Date(),
             }
           );
         }
-      } else {
-        console.warn(
-          "Socket is not connected. Message was saved but not broadcast."
-        );
       }
     } catch (error) {
       console.error(
         "Send text error:",
         error
       );
+    } finally {
+      sendingMessageRef.current = false;
     }
   };
 
@@ -1037,6 +1234,12 @@ function App() {
       return;
     }
 
+    if (sendingMessageRef.current) {
+      return;
+    }
+
+    sendingMessageRef.current = true;
+
     try {
       const formData =
         new FormData();
@@ -1090,7 +1293,7 @@ function App() {
       }
 
       // ===============================================
-      // SAVE MESSAGE
+      // SAVE IMAGE MESSAGE
       // ===============================================
 
       let response;
@@ -1099,53 +1302,57 @@ function App() {
         selectedChat.type ===
         "private"
       ) {
-        response = await fetch(
-          `${API_URL}/api/messages/private`,
-          {
-            method: "POST",
+        response =
+          await fetch(
+            `${API_URL}/api/messages/private`,
+            {
+              method: "POST",
 
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
 
-            body: JSON.stringify({
-              sender:
-                currentUser._id,
+              body: JSON.stringify({
+                sender:
+                  currentUser._id,
 
-              receiver:
-                selectedChat.user._id,
+                receiver:
+                  selectedChat
+                    .user._id,
 
-              type: "image",
+                type: "image",
 
-              imageUrl,
-            }),
-          }
-        );
+                imageUrl,
+              }),
+            }
+          );
       } else {
-        response = await fetch(
-          `${API_URL}/api/messages/group`,
-          {
-            method: "POST",
+        response =
+          await fetch(
+            `${API_URL}/api/messages/group`,
+            {
+              method: "POST",
 
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
+              headers: {
+                "Content-Type":
+                  "application/json",
+              },
 
-            body: JSON.stringify({
-              sender:
-                currentUser._id,
+              body: JSON.stringify({
+                sender:
+                  currentUser._id,
 
-              group:
-                selectedChat.group._id,
+                group:
+                  selectedChat
+                    .group._id,
 
-              type: "image",
+                type: "image",
 
-              imageUrl,
-            }),
-          }
-        );
+                imageUrl,
+              }),
+            }
+          );
       }
 
       const data =
@@ -1161,7 +1368,7 @@ function App() {
       }
 
       // ===============================================
-      // ADD IMAGE TO SENDER'S SCREEN
+      // ADD TO SENDER
       // ===============================================
 
       if (
@@ -1190,6 +1397,23 @@ function App() {
       setSelectedPhoto(null);
 
       // ===============================================
+      // MOVE CHAT TO TOP
+      // ===============================================
+
+      if (
+        selectedChat.type ===
+        "private"
+      ) {
+        moveUserToTop(
+          selectedChat.user._id
+        );
+      } else {
+        moveGroupToTop(
+          selectedChat.group._id
+        );
+      }
+
+      // ===============================================
       // SOCKET BROADCAST
       // ===============================================
 
@@ -1203,11 +1427,15 @@ function App() {
           socketRef.current.emit(
             "private_message",
             {
+              _id:
+                data._id,
+
               sender:
                 currentUser._id,
 
               receiver:
-                selectedChat.user._id,
+                selectedChat
+                  .user._id,
 
               message:
                 data.message ||
@@ -1220,17 +1448,25 @@ function App() {
               imageUrl:
                 data.imageUrl ||
                 imageUrl,
+
+              createdAt:
+                data.createdAt ||
+                new Date(),
             }
           );
         } else {
           socketRef.current.emit(
             "group_message",
             {
+              _id:
+                data._id,
+
               sender:
                 currentUser._id,
 
               group:
-                selectedChat.group._id,
+                selectedChat
+                  .group._id,
 
               message:
                 data.message ||
@@ -1243,13 +1479,13 @@ function App() {
               imageUrl:
                 data.imageUrl ||
                 imageUrl,
+
+              createdAt:
+                data.createdAt ||
+                new Date(),
             }
           );
         }
-      } else {
-        console.warn(
-          "Socket is not connected. Image was saved but not broadcast."
-        );
       }
     } catch (error) {
       console.error(
@@ -1260,17 +1496,18 @@ function App() {
       alert(
         "Could not send image."
       );
+    } finally {
+      sendingMessageRef.current = false;
     }
   };
 
   // =====================================================
-  // SEND
+  // SEND MESSAGE
   // =====================================================
 
   const sendMessage = async () => {
     if (selectedPhoto) {
       await sendImage();
-
       return;
     }
 
@@ -1295,7 +1532,6 @@ function App() {
     }
 
     setCreatingGroup(true);
-
     setGroupError("");
 
     try {
@@ -1558,34 +1794,52 @@ function App() {
               No groups yet.
             </div>
           ) : (
-            groups.map((group) => (
-              <button
-                className="chat-item"
-                key={group._id}
-                onClick={() =>
-                  openGroupChat(group)
-                }
-              >
-                <Avatar group />
+            groups.map((group) => {
+              const isUnread =
+                !!unreadGroups[
+                  group._id
+                ];
 
-                <div className="chat-item-info">
-                  <strong>
-                    {group.name ||
-                      "Group"}
-                  </strong>
+              return (
+                <button
+                  className={`chat-item ${
+                    isUnread
+                      ? "unread-chat"
+                      : ""
+                  }`}
+                  key={group._id}
+                  onClick={() =>
+                    openGroupChat(group)
+                  }
+                >
+                  <Avatar group />
 
-                  <span>
-                    {Array.isArray(
-                      group.members
-                    )
-                      ? group.members
-                          .length
-                      : 0}{" "}
-                    members
-                  </span>
-                </div>
-              </button>
-            ))
+                  <div className="chat-item-info">
+                    <strong>
+                      {group.name ||
+                        "Group"}
+                    </strong>
+
+                    <span>
+                      {Array.isArray(
+                        group.members
+                      )
+                        ? group
+                            .members
+                            .length
+                        : 0}{" "}
+                      members
+                    </span>
+                  </div>
+
+                  {isUnread && (
+                    <span className="unread-dot">
+                      ●
+                    </span>
+                  )}
+                </button>
+              );
+            })
           )}
         </div>
       </aside>
@@ -1866,8 +2120,9 @@ function App() {
                 className="send-button"
                 onClick={sendMessage}
                 disabled={
-                  !message.trim() &&
-                  !selectedPhoto
+                  (!message.trim() &&
+                    !selectedPhoto) ||
+                  sendingMessageRef.current
                 }
               >
                 Send
