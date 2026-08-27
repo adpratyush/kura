@@ -24,32 +24,25 @@ import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 
 import {
-  getPrivateMessages,
-  sendPrivateMessage,
+  getGroupMessages,
+  sendGroupMessage,
   uploadImage,
 } from "../services/api";
 
 import {
   connectSocket,
   getSocket,
-  disconnectSocket,
 } from "../services/socket";
 
 import { API_URL } from "../config";
 
-// =====================================================
-// CHAT SCREEN
-// =====================================================
-
-export default function ChatScreen({
-  userId,
-  name,
-  username,
-  profilePhoto,
+export default function GroupChatScreen({
+  groupId,
+  groupName,
 }) {
-  // ===================================================
+  // =====================================================
   // STATE
-  // ===================================================
+  // =====================================================
 
   const [currentUser, setCurrentUser] =
     useState(null);
@@ -69,31 +62,15 @@ export default function ChatScreen({
   const [selectedImage, setSelectedImage] =
     useState(null);
 
-  // ===================================================
-  // REFS
-  // ===================================================
-
   const flatListRef =
     useRef(null);
-
-  const selectedUserIdRef =
-    useRef(userId);
 
   const sendingRef =
     useRef(false);
 
-  // ===================================================
-  // KEEP USER ID UPDATED
-  // ===================================================
-
-  useEffect(() => {
-    selectedUserIdRef.current =
-      userId;
-  }, [userId]);
-
-  // ===================================================
+  // =====================================================
   // LOAD CURRENT USER
-  // ===================================================
+  // =====================================================
 
   useEffect(() => {
     loadCurrentUser();
@@ -130,22 +107,20 @@ export default function ChatScreen({
     }
   };
 
-  // ===================================================
-  // LOAD OLD MESSAGES
-  // ===================================================
+  // =====================================================
+  // LOAD GROUP MESSAGES
+  // =====================================================
 
   useEffect(() => {
     if (
-      !currentUser?._id ||
-      !userId
+      currentUser?._id &&
+      groupId
     ) {
-      return;
+      loadMessages();
     }
-
-    loadMessages();
   }, [
-    currentUser,
-    userId,
+    currentUser?._id,
+    groupId,
   ]);
 
   const loadMessages = async () => {
@@ -153,37 +128,41 @@ export default function ChatScreen({
       setLoading(true);
 
       console.log(
-        "Loading private messages:",
-        currentUser._id,
-        userId
+        "Loading group messages:",
+        groupId
       );
 
       const data =
-        await getPrivateMessages(
-          currentUser._id,
-          userId
+        await getGroupMessages(
+          groupId
         );
 
       console.log(
-        "Private messages:",
+        "Group messages response:",
         data
       );
 
-      setMessages(
-        Array.isArray(data)
-          ? data
-          : []
-      );
+      let messageArray = [];
+
+      if (Array.isArray(data)) {
+        messageArray = data;
+      } else if (
+        Array.isArray(data?.messages)
+      ) {
+        messageArray = data.messages;
+      }
+
+      setMessages(messageArray);
     } catch (error) {
       console.error(
-        "Load messages error:",
+        "Load group messages error:",
         error
       );
 
       Alert.alert(
         "Error",
-        error.message ||
-          "Could not load messages."
+        error?.message ||
+          "Could not load group messages."
       );
 
       setMessages([]);
@@ -192,20 +171,21 @@ export default function ChatScreen({
     }
   };
 
-  // ===================================================
-  // SOCKET CONNECTION
-  // ===================================================
+  // =====================================================
+  // SOCKET
+  // =====================================================
 
   useEffect(() => {
     if (
       !currentUser?._id ||
-      !userId
+      !groupId
     ) {
       return;
     }
 
     console.log(
-      "Connecting socket for chat..."
+      "Connecting socket for group:",
+      groupId
     );
 
     const socket =
@@ -217,48 +197,39 @@ export default function ChatScreen({
       return;
     }
 
-    // =================================================
-    // JOIN PRIVATE ROOM
-    // =================================================
+    // ===================================================
+    // JOIN GROUP
+    // ===================================================
 
-    const joinPrivateRoom =
-      () => {
-        console.log(
-          "Joining private room:",
-          currentUser._id,
-          userId
-        );
+    const joinGroup = () => {
+      console.log(
+        "Joining group room:",
+        groupId
+      );
 
-        socket.emit(
-          "join_private",
-          {
-            user1:
-              currentUser._id,
+      socket.emit(
+        "join_group",
+        String(groupId)
+      );
+    };
 
-            user2:
-              userId,
-          }
-        );
-      };
-
-    // Socket may already be connected
     if (socket.connected) {
-      joinPrivateRoom();
+      joinGroup();
     }
 
     socket.on(
       "connect",
-      joinPrivateRoom
+      joinGroup
     );
 
-    // =================================================
-    // RECEIVE MESSAGE
-    // =================================================
+    // ===================================================
+    // RECEIVE GROUP MESSAGE
+    // ===================================================
 
-    const handleNewMessage =
+    const handleNewGroupMessage =
       (newMessage) => {
         console.log(
-          "📨 New message received:",
+          "📨 New group message:",
           newMessage
         );
 
@@ -266,59 +237,21 @@ export default function ChatScreen({
           return;
         }
 
-        const senderId =
-          typeof newMessage.sender ===
+        const incomingGroup =
+          typeof newMessage.group ===
           "object"
-            ? newMessage.sender?._id
-            : newMessage.sender;
-
-        const receiverId =
-          typeof newMessage.receiver ===
-          "object"
-            ? newMessage.receiver?._id
-            : newMessage.receiver;
+            ? newMessage.group?._id
+            : newMessage.group;
 
         if (
-          !senderId ||
-          !receiverId
+          String(incomingGroup) !==
+          String(groupId)
         ) {
           return;
         }
 
-        // =============================================
-        // Make sure message belongs to this chat
-        // =============================================
-
-        const belongsToChat =
-          (
-            String(senderId) ===
-              String(
-                currentUser._id
-              ) &&
-            String(receiverId) ===
-              String(userId)
-          ) ||
-          (
-            String(senderId) ===
-              String(userId) &&
-            String(receiverId) ===
-              String(
-                currentUser._id
-              )
-          );
-
-        if (!belongsToChat) {
-          return;
-        }
-
-        // =============================================
-        // Add message
-        // =============================================
-
         setMessages(
           (previous) => {
-            // ID duplicate protection
-
             if (
               newMessage._id &&
               previous.some(
@@ -343,59 +276,46 @@ export default function ChatScreen({
       };
 
     socket.on(
-      "new_message",
-      handleNewMessage
+      "new_group_message",
+      handleNewGroupMessage
     );
 
-    // =================================================
+    // ===================================================
     // CLEANUP
-    // =================================================
+    // ===================================================
 
     return () => {
-      console.log(
-        "Leaving private chat..."
-      );
-
       socket.off(
         "connect",
-        joinPrivateRoom
+        joinGroup
       );
 
       socket.off(
-        "new_message",
-        handleNewMessage
+        "new_group_message",
+        handleNewGroupMessage
       );
 
       socket.emit(
-        "leave_private",
-        {
-          user1:
-            currentUser._id,
-
-          user2:
-            userId,
-        }
+        "leave_group",
+        String(groupId)
       );
 
-      /*
-       Don't disconnect the global socket here.
-
-       HomeScreen / other screens can reuse it.
-      */
+      console.log(
+        "Left group:",
+        groupId
+      );
     };
   }, [
     currentUser?._id,
-    userId,
+    groupId,
   ]);
 
-  // ===================================================
-  // SCROLL TO BOTTOM
-  // ===================================================
+  // =====================================================
+  // SCROLL
+  // =====================================================
 
   useEffect(() => {
-    if (
-      messages.length === 0
-    ) {
+    if (!messages.length) {
       return;
     }
 
@@ -406,15 +326,15 @@ export default function ChatScreen({
     }, 100);
   }, [messages]);
 
-  // ===================================================
+  // =====================================================
   // SEND TEXT
-  // ===================================================
+  // =====================================================
 
   const handleSendText =
     async () => {
       if (
         !currentUser?._id ||
-        !userId
+        !groupId
       ) {
         return;
       }
@@ -432,40 +352,32 @@ export default function ChatScreen({
         return;
       }
 
-      sendingRef.current =
-        true;
-
+      sendingRef.current = true;
       setSending(true);
 
       try {
         console.log(
-          "Sending message..."
+          "Sending group message..."
         );
 
         const data =
-          await sendPrivateMessage(
-            {
-              sender:
-                currentUser._id,
+          await sendGroupMessage({
+            sender:
+              currentUser._id,
 
-              receiver:
-                userId,
+            group:
+              groupId,
 
-              message:
-                cleanText,
+            message:
+              cleanText,
 
-              type: "text",
-            }
-          );
+            type: "text",
+          });
 
         console.log(
-          "Message saved:",
+          "Group message saved:",
           data
         );
-
-        // =============================================
-        // Add to current user's screen
-        // =============================================
 
         if (data) {
           setMessages(
@@ -495,9 +407,9 @@ export default function ChatScreen({
 
         setText("");
 
-        // =============================================
-        // Broadcast through Socket.IO
-        // =============================================
+        // =================================================
+        // SOCKET BROADCAST
+        // =================================================
 
         const socket =
           getSocket();
@@ -506,7 +418,7 @@ export default function ChatScreen({
           socket?.connected
         ) {
           socket.emit(
-            "private_message",
+            "group_message",
             {
               _id:
                 data?._id,
@@ -514,8 +426,8 @@ export default function ChatScreen({
               sender:
                 currentUser._id,
 
-              receiver:
-                userId,
+              group:
+                groupId,
 
               message:
                 data?.message ||
@@ -536,22 +448,22 @@ export default function ChatScreen({
           );
 
           console.log(
-            "📤 Socket message emitted"
+            "📤 Group socket message emitted"
           );
         } else {
           console.warn(
-            "Socket is not connected."
+            "Group socket is not connected"
           );
         }
       } catch (error) {
         console.error(
-          "Send message error:",
+          "Send group message error:",
           error
         );
 
         Alert.alert(
           "Message failed",
-          error.message ||
+          error?.message ||
             "Could not send message."
         );
       } finally {
@@ -562,9 +474,9 @@ export default function ChatScreen({
       }
     };
 
-  // ===================================================
+  // =====================================================
   // PICK IMAGE
-  // ===================================================
+  // =====================================================
 
   const pickImage =
     async () => {
@@ -577,7 +489,7 @@ export default function ChatScreen({
         ) {
           Alert.alert(
             "Permission required",
-            "Please allow photo library access to send images."
+            "Please allow photo library access."
           );
 
           return;
@@ -605,10 +517,6 @@ export default function ChatScreen({
 
         const image =
           result.assets[0];
-
-        // =============================================
-        // Size check
-        // =============================================
 
         if (
           image.fileSize &&
@@ -639,16 +547,16 @@ export default function ChatScreen({
       }
     };
 
-  // ===================================================
+  // =====================================================
   // SEND IMAGE
-  // ===================================================
+  // =====================================================
 
   const handleSendImage =
     async () => {
       if (
         !selectedImage ||
         !currentUser?._id ||
-        !userId
+        !groupId
       ) {
         return;
       }
@@ -659,65 +567,44 @@ export default function ChatScreen({
         return;
       }
 
-      sendingRef.current =
-        true;
-
+      sendingRef.current = true;
       setSending(true);
 
       try {
         console.log(
-          "Uploading image..."
+          "Uploading group image..."
         );
-
-        // =============================================
-        // Upload
-        // =============================================
 
         const imageUrl =
           await uploadImage(
             selectedImage
           );
 
-        console.log(
-          "Image uploaded:",
-          imageUrl
-        );
-
         if (!imageUrl) {
           throw new Error(
-            "Server did not return an image URL."
+            "Server did not return image URL."
           );
         }
 
-        // =============================================
-        // Save message
-        // =============================================
-
         const data =
-          await sendPrivateMessage(
-            {
-              sender:
-                currentUser._id,
+          await sendGroupMessage({
+            sender:
+              currentUser._id,
 
-              receiver:
-                userId,
+            group:
+              groupId,
 
-              message: "",
+            message: "",
 
-              type: "image",
+            type: "image",
 
-              imageUrl,
-            }
-          );
+            imageUrl,
+          });
 
         console.log(
-          "Image message saved:",
+          "Group image message saved:",
           data
         );
-
-        // =============================================
-        // Add locally
-        // =============================================
 
         if (data) {
           setMessages(
@@ -749,10 +636,6 @@ export default function ChatScreen({
           null
         );
 
-        // =============================================
-        // Broadcast
-        // =============================================
-
         const socket =
           getSocket();
 
@@ -760,7 +643,7 @@ export default function ChatScreen({
           socket?.connected
         ) {
           socket.emit(
-            "private_message",
+            "group_message",
             {
               _id:
                 data?._id,
@@ -768,8 +651,8 @@ export default function ChatScreen({
               sender:
                 currentUser._id,
 
-              receiver:
-                userId,
+              group:
+                groupId,
 
               message: "",
 
@@ -786,20 +669,16 @@ export default function ChatScreen({
                 new Date(),
             }
           );
-
-          console.log(
-            "📤 Image message emitted"
-          );
         }
       } catch (error) {
         console.error(
-          "Send image error:",
+          "Send group image error:",
           error
         );
 
         Alert.alert(
           "Image failed",
-          error.message ||
+          error?.message ||
             "Could not send image."
         );
       } finally {
@@ -810,164 +689,182 @@ export default function ChatScreen({
       }
     };
 
-  // ===================================================
+  // =====================================================
   // SEND
-  // ===================================================
+  // =====================================================
 
-  const sendMessage =
-    async () => {
-      if (selectedImage) {
-        await handleSendImage();
-        return;
-      }
-
+  const sendMessage = async () => {
+    if (selectedImage) {
+      await handleSendImage();
+    } else {
       await handleSendText();
-    };
+    }
+  };
 
-  // ===================================================
-  // AVATAR
-  // ===================================================
+  // =====================================================
+  // IMAGE URL
+  // =====================================================
 
-  const getPhotoUrl =
-    (photo) => {
-      if (!photo) {
-        return "";
-      }
+  const getImageUrl = (
+    imageUrl
+  ) => {
+    if (!imageUrl) {
+      return "";
+    }
 
-      if (
-        photo.startsWith(
-          "http://"
-        ) ||
-        photo.startsWith(
-          "https://"
-        )
-      ) {
-        return photo;
-      }
+    if (
+      imageUrl.startsWith(
+        "http://"
+      ) ||
+      imageUrl.startsWith(
+        "https://"
+      )
+    ) {
+      return imageUrl;
+    }
 
-      return `${API_URL}${photo}`;
-    };
+    return `${API_URL}${imageUrl}`;
+  };
 
-  const photoUrl =
-    getPhotoUrl(
-      profilePhoto
-    );
+  // =====================================================
+  // GET SENDER
+  // =====================================================
 
-  // ===================================================
-  // RENDER MESSAGE
-  // ===================================================
-
-  const renderMessage =
-    ({ item }) => {
-      if (!item) {
-        return null;
-      }
-
-      const senderId =
-        typeof item.sender ===
-        "object"
-          ? item.sender?._id
-          : item.sender;
-
-      const isMine =
-        String(senderId) ===
-        String(
-          currentUser?._id
-        );
-
-      const isImage =
-        item.type === "image";
-
-      let messageImage =
-        item.imageUrl || "";
-
-      if (
-        messageImage &&
-        !messageImage.startsWith(
-          "http://"
-        ) &&
-        !messageImage.startsWith(
-          "https://"
-        )
-      ) {
-        messageImage =
-          `${API_URL}${messageImage}`;
-      }
-
+  const getSenderName = (
+    sender
+  ) => {
+    if (
+      typeof sender ===
+      "object"
+    ) {
       return (
+        sender?.name ||
+        sender?.username ||
+        "User"
+      );
+    }
+
+    return "User";
+  };
+
+  // =====================================================
+  // RENDER MESSAGE
+  // =====================================================
+
+  const renderMessage = ({
+    item,
+  }) => {
+    if (!item) {
+      return null;
+    }
+
+    const senderId =
+      typeof item.sender ===
+      "object"
+        ? item.sender?._id
+        : item.sender;
+
+    const isMine =
+      String(senderId) ===
+      String(
+        currentUser?._id
+      );
+
+    const isImage =
+      item.type === "image";
+
+    const messageImage =
+      getImageUrl(
+        item.imageUrl
+      );
+
+    return (
+      <View
+        style={[
+          styles.messageRow,
+          isMine
+            ? styles.myMessageRow
+            : styles.theirMessageRow,
+        ]}
+      >
         <View
           style={[
-            styles.messageRow,
+            styles.messageBubble,
             isMine
-              ? styles.myMessageRow
-              : styles.theirMessageRow,
+              ? styles.myBubble
+              : styles.theirBubble,
           ]}
         >
-          <View
-            style={[
-              styles.messageBubble,
-              isMine
-                ? styles.myBubble
-                : styles.theirBubble,
-            ]}
-          >
-            {isImage &&
-            messageImage ? (
-              <Image
-                source={{
-                  uri: messageImage,
-                }}
-                style={
-                  styles.messageImage
-                }
-                resizeMode="cover"
-              />
-            ) : (
-              <Text
-                style={[
-                  styles.messageText,
-                  isMine
-                    ? styles.myMessageText
-                    : styles.theirMessageText,
-                ]}
-              >
-                {item.message || ""}
-              </Text>
-            )}
+          {!isMine && (
+            <Text
+              style={
+                styles.senderName
+              }
+            >
+              {getSenderName(
+                item.sender
+              )}
+            </Text>
+          )}
 
+          {isImage &&
+          messageImage ? (
+            <Image
+              source={{
+                uri: messageImage,
+              }}
+              style={
+                styles.messageImage
+              }
+              resizeMode="cover"
+            />
+          ) : (
             <Text
               style={[
-                styles.time,
+                styles.messageText,
                 isMine
-                  ? styles.myTime
-                  : styles.theirTime,
+                  ? styles.myMessageText
+                  : styles.theirMessageText,
               ]}
             >
-              {item.createdAt
-                ? new Date(
-                    item.createdAt
-                  ).toLocaleTimeString(
-                    [],
-                    {
-                      hour: "2-digit",
-                      minute:
-                        "2-digit",
-                    }
-                  )
-                : ""}
+              {item.message ||
+                ""}
             </Text>
-          </View>
-        </View>
-      );
-    };
+          )}
 
-  // ===================================================
+          <Text
+            style={[
+              styles.time,
+              isMine
+                ? styles.myTime
+                : styles.theirTime,
+            ]}
+          >
+            {item.createdAt
+              ? new Date(
+                  item.createdAt
+                ).toLocaleTimeString(
+                  [],
+                  {
+                    hour: "2-digit",
+                    minute:
+                      "2-digit",
+                  }
+                )
+              : ""}
+          </Text>
+        </View>
+      </View>
+    );
+  };
+
+  // =====================================================
   // LOADING
-  // ===================================================
+  // =====================================================
 
   if (
-    !currentUser ||
-    loading
+    loading ||
+    !currentUser
   ) {
     return (
       <SafeAreaView
@@ -985,16 +882,16 @@ export default function ChatScreen({
               styles.loadingText
             }
           >
-            Loading conversation...
+            Loading group...
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ===================================================
+  // =====================================================
   // SCREEN
-  // ===================================================
+  // =====================================================
 
   return (
     <SafeAreaView
@@ -1007,15 +904,8 @@ export default function ChatScreen({
             ? "padding"
             : undefined
         }
-        keyboardVerticalOffset={
-          Platform.OS === "ios"
-            ? 10
-            : 0
-        }
       >
-        {/* =============================================
-            HEADER
-        ============================================= */}
+        {/* HEADER */}
 
         <View
           style={styles.header}
@@ -1038,32 +928,15 @@ export default function ChatScreen({
           </Pressable>
 
           <View
-            style={styles.headerAvatar}
+            style={styles.groupAvatar}
           >
-            {photoUrl ? (
-              <Image
-                source={{
-                  uri: photoUrl,
-                }}
-                style={
-                  styles.headerAvatarImage
-                }
-              />
-            ) : (
-              <Text
-                style={
-                  styles.headerAvatarText
-                }
-              >
-                {(
-                  name ||
-                  username ||
-                  "U"
-                )
-                  .charAt(0)
-                  .toUpperCase()}
-              </Text>
-            )}
+            <Text
+              style={
+                styles.groupAvatarText
+              }
+            >
+              👥
+            </Text>
           </View>
 
           <View
@@ -1077,25 +950,21 @@ export default function ChatScreen({
               }
               numberOfLines={1}
             >
-              {name ||
-                username ||
-                "User"}
+              {groupName ||
+                "Group"}
             </Text>
 
             <Text
               style={
-                styles.headerUsername
+                styles.headerSubtitle
               }
-              numberOfLines={1}
             >
-              @{username || "user"}
+              Group conversation
             </Text>
           </View>
         </View>
 
-        {/* =============================================
-            MESSAGES
-        ============================================= */}
+        {/* MESSAGES */}
 
         <FlatList
           ref={flatListRef}
@@ -1132,7 +1001,7 @@ export default function ChatScreen({
                   styles.emptyIcon
                 }
               >
-                💬
+                👥
               </Text>
 
               <Text
@@ -1140,7 +1009,7 @@ export default function ChatScreen({
                   styles.emptyTitle
                 }
               >
-                Start a conversation
+                Start the group conversation
               </Text>
 
               <Text
@@ -1148,19 +1017,13 @@ export default function ChatScreen({
                   styles.emptyText
                 }
               >
-                Send a message to{" "}
-                {name ||
-                  username ||
-                  "this user"}
-                .
+                Send a message to the group.
               </Text>
             </View>
           }
         />
 
-        {/* =============================================
-            IMAGE PREVIEW
-        ============================================= */}
+        {/* IMAGE PREVIEW */}
 
         {selectedImage && (
           <View
@@ -1198,9 +1061,7 @@ export default function ChatScreen({
           </View>
         )}
 
-        {/* =============================================
-            INPUT
-        ============================================= */}
+        {/* INPUT */}
 
         <View
           style={styles.inputContainer}
@@ -1239,15 +1100,6 @@ export default function ChatScreen({
             }
             multiline
             maxLength={2000}
-            onSubmitEditing={(event) => {
-              if (
-                Platform.OS !==
-                "ios"
-              ) {
-                event.preventDefault();
-                sendMessage();
-              }
-            }}
           />
 
           <Pressable
@@ -1303,10 +1155,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // ===================================================
-  // LOADING
-  // ===================================================
-
   loading: {
     flex: 1,
     alignItems: "center",
@@ -1319,10 +1167,6 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     fontSize: 14,
   },
-
-  // ===================================================
-  // HEADER
-  // ===================================================
 
   header: {
     height: 72,
@@ -1346,28 +1190,19 @@ const styles = StyleSheet.create({
     fontSize: 36,
     fontWeight: "300",
     color: "#111827",
-    lineHeight: 40,
   },
 
-  headerAvatar: {
+  groupAvatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#DBEAFE",
+    backgroundColor: "#EDE9FE",
     alignItems: "center",
     justifyContent: "center",
-    overflow: "hidden",
   },
 
-  headerAvatarImage: {
-    width: "100%",
-    height: "100%",
-  },
-
-  headerAvatarText: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: "#2563EB",
+  groupAvatarText: {
+    fontSize: 23,
   },
 
   headerInfo: {
@@ -1381,15 +1216,11 @@ const styles = StyleSheet.create({
     color: "#111827",
   },
 
-  headerUsername: {
-    marginTop: 2,
+  headerSubtitle: {
+    marginTop: 3,
     fontSize: 12,
     color: "#6B7280",
   },
-
-  // ===================================================
-  // MESSAGES
-  // ===================================================
 
   messagesList: {
     paddingHorizontal: 14,
@@ -1436,6 +1267,13 @@ const styles = StyleSheet.create({
     borderColor: "#E5E7EB",
   },
 
+  senderName: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#2563EB",
+    marginBottom: 4,
+  },
+
   messageText: {
     fontSize: 15,
     lineHeight: 21,
@@ -1463,24 +1301,14 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
   },
 
-  // ===================================================
-  // IMAGE
-  // ===================================================
-
   messageImage: {
     width: 220,
     height: 220,
     borderRadius: 12,
-    marginBottom: 3,
   },
-
-  // ===================================================
-  // EMPTY
-  // ===================================================
 
   emptyChat: {
     alignItems: "center",
-    justifyContent: "center",
   },
 
   emptyIcon: {
@@ -1492,18 +1320,14 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     color: "#111827",
+    textAlign: "center",
   },
 
   emptyText: {
     marginTop: 8,
-    textAlign: "center",
     color: "#6B7280",
-    lineHeight: 20,
+    textAlign: "center",
   },
-
-  // ===================================================
-  // IMAGE PREVIEW
-  // ===================================================
 
   imagePreviewContainer: {
     height: 100,
@@ -1534,12 +1358,7 @@ const styles = StyleSheet.create({
   removeImageText: {
     color: "#FFFFFF",
     fontSize: 18,
-    lineHeight: 20,
   },
-
-  // ===================================================
-  // INPUT
-  // ===================================================
 
   inputContainer: {
     minHeight: 62,
@@ -1560,12 +1379,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "#EFF6FF",
     marginRight: 8,
-    marginBottom: 1,
   },
 
   attachText: {
     fontSize: 27,
-    fontWeight: "400",
     color: "#2563EB",
   },
 
@@ -1589,7 +1406,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#2563EB",
-    marginBottom: 1,
   },
 
   sendDisabled: {

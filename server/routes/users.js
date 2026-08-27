@@ -1,52 +1,9 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
-const multer = require("multer");
-const {
-  CloudinaryStorage,
-} = require("multer-storage-cloudinary");
 
-const cloudinary = require("../config/cloudinary");
 const User = require("../models/User");
 
 const router = express.Router();
-
-// =====================================================
-// CLOUDINARY PROFILE PHOTO STORAGE
-// =====================================================
-
-const storage = new CloudinaryStorage({
-  cloudinary,
-
-  params: {
-    folder: "kura/profiles",
-    allowed_formats: [
-      "jpg",
-      "jpeg",
-      "png",
-      "webp",
-    ],
-  },
-});
-
-const upload = multer({
-  storage,
-
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
-
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(
-        new Error(
-          "Only image files are allowed."
-        )
-      );
-    }
-  },
-});
 
 // =====================================================
 // REGISTER
@@ -55,14 +12,18 @@ const upload = multer({
 
 router.post(
   "/register",
-  upload.single("profilePhoto"),
   async (req, res) => {
     try {
       const {
         name,
         username,
         password,
+        profilePhoto,
       } = req.body;
+
+      // -------------------------------------------------
+      // VALIDATE REQUIRED FIELDS
+      // -------------------------------------------------
 
       if (
         !name ||
@@ -75,6 +36,10 @@ router.post(
         });
       }
 
+      // -------------------------------------------------
+      // PASSWORD VALIDATION
+      // -------------------------------------------------
+
       if (password.length < 6) {
         return res.status(400).json({
           message:
@@ -82,12 +47,23 @@ router.post(
         });
       }
 
+      // -------------------------------------------------
+      // CLEAN USERNAME
+      // -------------------------------------------------
+
       const cleanUsername =
-        username.trim().toLowerCase();
+        username
+          .trim()
+          .toLowerCase();
+
+      // -------------------------------------------------
+      // CHECK USERNAME
+      // -------------------------------------------------
 
       const existingUser =
         await User.findOne({
-          username: cleanUsername,
+          username:
+            cleanUsername,
         });
 
       if (existingUser) {
@@ -97,24 +73,37 @@ router.post(
         });
       }
 
-      // Hash password
+      // -------------------------------------------------
+      // HASH PASSWORD
+      // -------------------------------------------------
+
       const hashedPassword =
         await bcrypt.hash(
           password,
           10
         );
 
-      // Cloudinary URL
-      let profilePhoto = "";
+      // -------------------------------------------------
+      // PROFILE PHOTO
+      //
+      // The iOS app uploads the image directly
+      // to Cloudinary.
+      //
+      // The app then sends the Cloudinary URL here.
+      // -------------------------------------------------
 
-      if (req.file) {
-        profilePhoto =
-          req.file.path;
-      }
+      const profilePhoto =
+        profilePhoto ||
+        "";
+
+      // -------------------------------------------------
+      // CREATE USER
+      // -------------------------------------------------
 
       const user =
         await User.create({
-          name: name.trim(),
+          name:
+            name.trim(),
 
           username:
             cleanUsername,
@@ -122,20 +111,31 @@ router.post(
           password:
             hashedPassword,
 
-          profilePhoto,
+          profilePhoto:
+            profilePhoto,
         });
+
+      // -------------------------------------------------
+      // REMOVE PASSWORD FROM RESPONSE
+      // -------------------------------------------------
 
       const safeUser =
         await User.findById(
           user._id
         ).select("-password");
 
+      // -------------------------------------------------
+      // RESPONSE
+      // -------------------------------------------------
+
       return res.status(201).json({
         message:
           "User registered successfully.",
 
-        user: safeUser,
+        user:
+          safeUser,
       });
+
     } catch (error) {
       console.error(
         "Registration error:",
@@ -164,6 +164,10 @@ router.post(
         password,
       } = req.body;
 
+      // -------------------------------------------------
+      // VALIDATE
+      // -------------------------------------------------
+
       if (
         !username ||
         !password
@@ -174,10 +178,18 @@ router.post(
         });
       }
 
+      // -------------------------------------------------
+      // CLEAN USERNAME
+      // -------------------------------------------------
+
       const cleanUsername =
         username
           .trim()
           .toLowerCase();
+
+      // -------------------------------------------------
+      // FIND USER
+      // -------------------------------------------------
 
       const user =
         await User.findOne({
@@ -192,6 +204,10 @@ router.post(
         });
       }
 
+      // -------------------------------------------------
+      // CHECK PASSWORD
+      // -------------------------------------------------
+
       const passwordMatch =
         await bcrypt.compare(
           password,
@@ -205,17 +221,27 @@ router.post(
         });
       }
 
+      // -------------------------------------------------
+      // REMOVE PASSWORD
+      // -------------------------------------------------
+
       const safeUser =
         await User.findById(
           user._id
         ).select("-password");
 
+      // -------------------------------------------------
+      // RESPONSE
+      // -------------------------------------------------
+
       return res.json({
         message:
           "Login successful.",
 
-        user: safeUser,
+        user:
+          safeUser,
       });
+
     } catch (error) {
       console.error(
         "Login error:",
@@ -247,6 +273,7 @@ router.get(
           });
 
       return res.json(users);
+
     } catch (error) {
       console.error(
         "Get users error:",
@@ -260,5 +287,9 @@ router.get(
     }
   }
 );
+
+// =====================================================
+// EXPORT
+// =====================================================
 
 module.exports = router;

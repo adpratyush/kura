@@ -1,378 +1,312 @@
-import React, { useCallback, useEffect, useState } from "react";
-
+import React, { useCallback, useState } from "react";
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
-  Image,
+  Pressable,
   RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router, useFocusEffect } from "expo-router";
 
-import { API_URL } from "../App";
+import { getUsers, getGroups } from "../services/api";
 
-// =====================================================
-// HOME SCREEN
-// =====================================================
+export default function HomeScreen() {
+  const [currentUser, setCurrentUser] = useState(null);
 
-export default function HomeScreen({
-  currentUser,
-  onLogout,
-}) {
   const [users, setUsers] = useState([]);
   const [groups, setGroups] = useState([]);
 
-  const [loadingUsers, setLoadingUsers] = useState(true);
-  const [loadingGroups, setLoadingGroups] = useState(true);
-
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // ===================================================
-  // LOAD USERS
-  // ===================================================
+  const [userError, setUserError] = useState("");
+  const [groupError, setGroupError] = useState("");
 
-  const loadUsers = async () => {
+  // =====================================================
+  // LOAD DATA
+  // =====================================================
+
+  const loadData = async (isRefresh = false) => {
     try {
-      setLoadingUsers(true);
-
-      const response = await fetch(
-        `${API_URL}/api/users`
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message || "Could not load users"
-        );
+      if (isRefresh) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
       }
 
-      if (Array.isArray(data)) {
-        // Don't show current user
-        const otherUsers = data.filter(
-          (user) =>
-            String(user?._id) !==
-            String(currentUser?._id)
+      setUserError("");
+      setGroupError("");
+
+      // =================================================
+      // GET CURRENT USER
+      // =================================================
+
+      const savedUser =
+        await AsyncStorage.getItem("currentUser");
+
+      if (!savedUser) {
+        router.replace("/login");
+        return;
+      }
+
+      const parsedUser = JSON.parse(savedUser);
+
+      if (!parsedUser?._id) {
+        await AsyncStorage.removeItem("currentUser");
+        router.replace("/login");
+        return;
+      }
+
+      setCurrentUser(parsedUser);
+
+      console.log(
+        "Current mobile user:",
+        parsedUser._id
+      );
+
+      // =================================================
+      // LOAD USERS AND GROUPS
+      // =================================================
+
+      const [usersResult, groupsResult] =
+        await Promise.allSettled([
+          getUsers(),
+          getGroups(parsedUser._id),
+        ]);
+
+      // =================================================
+      // USERS
+      // =================================================
+
+      if (usersResult.status === "fulfilled") {
+        const usersData = usersResult.value;
+
+        console.log(
+          "Users received:",
+          usersData
         );
 
-        setUsers(otherUsers);
+        if (Array.isArray(usersData)) {
+          setUsers(
+            usersData.filter(
+              (user) =>
+                String(user?._id) !==
+                String(parsedUser._id)
+            )
+          );
+        } else {
+          setUsers([]);
+        }
       } else {
+        console.error(
+          "Could not load users:",
+          usersResult.reason
+        );
+
+        setUserError(
+          usersResult.reason?.message ||
+            "Could not load users."
+        );
+
         setUsers([]);
+      }
+
+      // =================================================
+      // GROUPS
+      // =================================================
+
+      if (groupsResult.status === "fulfilled") {
+        const groupsData = groupsResult.value;
+
+        console.log(
+          "Groups received:",
+          groupsData
+        );
+
+        if (Array.isArray(groupsData)) {
+          setGroups(groupsData);
+        } else {
+          console.warn(
+            "Groups response is not an array:",
+            groupsData
+          );
+
+          setGroups([]);
+        }
+      } else {
+        console.error(
+          "Could not load groups:",
+          groupsResult.reason
+        );
+
+        setGroupError(
+          groupsResult.reason?.message ||
+            "Could not load groups."
+        );
+
+        setGroups([]);
       }
     } catch (error) {
       console.error(
-        "Users error:",
+        "Home loading error:",
         error
       );
 
-      Alert.alert(
-        "Error",
-        "Could not load users."
+      setGroupError(
+        error?.message ||
+          "Could not load data."
       );
-
-      setUsers([]);
     } finally {
-      setLoadingUsers(false);
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  // ===================================================
-  // LOAD GROUPS
-  // ===================================================
+  // =====================================================
+  // LOAD WHEN SCREEN OPENS
+  // =====================================================
 
-  const loadGroups = async () => {
-    if (!currentUser?._id) {
+  useFocusEffect(
+    useCallback(() => {
+      loadData(false);
+    }, [])
+  );
+
+  // =====================================================
+  // REFRESH
+  // =====================================================
+
+  const onRefresh = () => {
+    loadData(true);
+  };
+
+  // =====================================================
+  // LOGOUT
+  // =====================================================
+
+  const logout = async () => {
+    try {
+      await AsyncStorage.removeItem(
+        "currentUser"
+      );
+
+      setCurrentUser(null);
+      setUsers([]);
+      setGroups([]);
+
+      router.replace("/login");
+    } catch (error) {
+      console.error(
+        "Logout error:",
+        error
+      );
+    }
+  };
+
+  // =====================================================
+  // OPEN PRIVATE CHAT
+  // =====================================================
+
+  const openPrivateChat = (user) => {
+    if (!user?._id) {
       return;
     }
 
-    try {
-      setLoadingGroups(true);
+    console.log(
+      "Opening private chat:",
+      user._id
+    );
 
-      const response = await fetch(
-        `${API_URL}/api/groups/user/${currentUser._id}`
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message ||
-            "Could not load groups"
-        );
-      }
-
-      setGroups(
-        Array.isArray(data)
-          ? data
-          : []
-      );
-    } catch (error) {
-      console.error(
-        "Groups error:",
-        error
-      );
-
-      setGroups([]);
-    } finally {
-      setLoadingGroups(false);
-    }
+    router.push({
+      pathname: "/chat",
+      params: {
+        type: "private",
+        userId: String(user._id),
+        userName:
+          user.name ||
+          user.username ||
+          "User",
+      },
+    });
   };
 
-  // ===================================================
-  // INITIAL LOAD
-  // ===================================================
+  // =====================================================
+  // OPEN GROUP CHAT
+  // =====================================================
 
-  useEffect(() => {
-    loadUsers();
-    loadGroups();
-  }, [currentUser?._id]);
+  const openGroupChat = (group) => {
+    if (!group?._id) {
+      console.error(
+        "Cannot open group: missing group ID",
+        group
+      );
 
-  // ===================================================
-  // REFRESH
-  // ===================================================
-
-  const onRefresh = useCallback(
-    async () => {
-      setRefreshing(true);
-
-      await Promise.all([
-        loadUsers(),
-        loadGroups(),
-      ]);
-
-      setRefreshing(false);
-    },
-    [currentUser?._id]
-  );
-
-  // ===================================================
-  // USER HELPERS
-  // ===================================================
-
-  const getUserName = (user) => {
-    if (!user) {
-      return "User";
+      return;
     }
 
+    console.log(
+      "Opening group chat:",
+      group._id,
+      group.name
+    );
+
+    router.push({
+      pathname: "/chat",
+      params: {
+        type: "group",
+        groupId: String(group._id),
+        groupName:
+          group.name || "Group",
+      },
+    });
+  };
+
+  // =====================================================
+  // USER NAME
+  // =====================================================
+
+  const getUserName = (user) => {
     return (
-      user.name ||
-      user.username ||
+      user?.name ||
+      user?.username ||
       "User"
     );
   };
 
-  const getUserInitial = (user) => {
-    const name = getUserName(user);
+  // =====================================================
+  // USER INITIAL
+  // =====================================================
 
-    return name
+  const getUserInitial = (user) => {
+    return getUserName(user)
       .charAt(0)
       .toUpperCase();
   };
 
-  // ===================================================
-  // PHOTO URL
-  // ===================================================
-
-  const getPhotoUrl = (user) => {
-    if (
-      !user ||
-      typeof user !== "object"
-    ) {
-      return "";
-    }
-
-    if (!user.profilePhoto) {
-      return "";
-    }
-
-    if (
-      user.profilePhoto.startsWith(
-        "http://"
-      ) ||
-      user.profilePhoto.startsWith(
-        "https://"
-      )
-    ) {
-      return user.profilePhoto;
-    }
-
-    return `${API_URL}${user.profilePhoto}`;
-  };
-
-  // ===================================================
-  // USER AVATAR
-  // ===================================================
-
-  const UserAvatar = ({
-    user,
-    group = false,
-  }) => {
-    if (group) {
-      return (
-        <View
-          style={[
-            styles.avatar,
-            styles.groupAvatar,
-          ]}
-        >
-          <Text style={styles.groupEmoji}>
-            👥
-          </Text>
-        </View>
-      );
-    }
-
-    const photo = getPhotoUrl(user);
-
-    return (
-      <View style={styles.avatar}>
-        {photo ? (
-          <Image
-            source={{
-              uri: photo,
-            }}
-            style={styles.avatarImage}
-          />
-        ) : (
-          <Text style={styles.avatarText}>
-            {getUserInitial(user)}
-          </Text>
-        )}
-      </View>
-    );
-  };
-
-  // ===================================================
-  // OPEN PRIVATE CHAT
-  // ===================================================
-
-  const openPrivateChat = (user) => {
-    console.log(
-      "Opening private chat:",
-      user
-    );
-
-    /*
-     * We will connect this to
-     * PrivateChatScreen next.
-     */
-
-    Alert.alert(
-      "Private Chat",
-      `Opening chat with ${getUserName(
-        user
-      )}`
-    );
-  };
-
-  // ===================================================
-  // OPEN GROUP CHAT
-  // ===================================================
-
-  const openGroupChat = (group) => {
-    console.log(
-      "Opening group chat:",
-      group
-    );
-
-    /*
-     * We will connect this to
-     * GroupChatScreen next.
-     */
-
-    Alert.alert(
-      "Group Chat",
-      `Opening ${group.name || "Group"}`
-    );
-  };
-
-  // ===================================================
-  // LOGOUT CONFIRMATION
-  // ===================================================
-
-  const confirmLogout = () => {
-    Alert.alert(
-      "Logout",
-      "Are you sure you want to logout?",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-        {
-          text: "Logout",
-          style: "destructive",
-          onPress: onLogout,
-        },
-      ]
-    );
-  };
-
-  // ===================================================
-  // USER ITEM
-  // ===================================================
-
-  const renderUser = ({
-    item,
-  }) => {
-    return (
-      <TouchableOpacity
-        style={styles.chatItem}
-        activeOpacity={0.7}
-        onPress={() =>
-          openPrivateChat(item)
-        }
-      >
-        <UserAvatar user={item} />
-
-        <View style={styles.chatInfo}>
-          <Text
-            style={styles.chatName}
-            numberOfLines={1}
-          >
-            {getUserName(item)}
-          </Text>
-
-          <Text
-            style={styles.chatUsername}
-            numberOfLines={1}
-          >
-            @{item.username || "user"}
-          </Text>
-        </View>
-
-        <Text style={styles.chevron}>
-          ›
-        </Text>
-      </TouchableOpacity>
-    );
-  };
-
-  // ===================================================
+  // =====================================================
   // GROUP ITEM
-  // ===================================================
+  // =====================================================
 
-  const renderGroup = ({
-    item,
-  }) => {
-    const memberCount =
-      Array.isArray(item.members)
-        ? item.members.length
-        : 0;
-
+  const renderGroup = ({ item }) => {
     return (
-      <TouchableOpacity
-        style={styles.chatItem}
-        activeOpacity={0.7}
+      <Pressable
+        style={({ pressed }) => [
+          styles.chatItem,
+          pressed && styles.pressed,
+        ]}
         onPress={() =>
           openGroupChat(item)
         }
       >
-        <UserAvatar group />
+        <View style={styles.groupAvatar}>
+          <Text style={styles.groupAvatarText}>
+            👥
+          </Text>
+        </View>
 
         <View style={styles.chatInfo}>
           <Text
@@ -382,115 +316,92 @@ export default function HomeScreen({
             {item.name || "Group"}
           </Text>
 
-          <Text style={styles.chatUsername}>
-            {memberCount}{" "}
-            {memberCount === 1
-              ? "member"
-              : "members"}
+          <Text style={styles.chatSubtitle}>
+            {Array.isArray(item.members)
+              ? `${item.members.length} members`
+              : "Group conversation"}
           </Text>
         </View>
 
-        <Text style={styles.chevron}>
+        <Text style={styles.arrow}>
           ›
         </Text>
-      </TouchableOpacity>
+      </Pressable>
     );
   };
 
-  // ===================================================
-  // EMPTY USERS
-  // ===================================================
+  // =====================================================
+  // USER ITEM
+  // =====================================================
 
-  const renderEmptyUsers = () => {
-    if (loadingUsers) {
-      return null;
-    }
-
+  const renderUser = ({ item }) => {
     return (
-      <View style={styles.emptySection}>
-        <Text style={styles.emptyIcon}>
-          👤
-        </Text>
-
-        <Text style={styles.emptyTitle}>
-          No other users
-        </Text>
-
-        <Text style={styles.emptyText}>
-          Other registered users will
-          appear here.
-        </Text>
-      </View>
-    );
-  };
-
-  // ===================================================
-  // EMPTY GROUPS
-  // ===================================================
-
-  const renderEmptyGroups = () => {
-    if (loadingGroups) {
-      return null;
-    }
-
-    return (
-      <View style={styles.emptySection}>
-        <Text style={styles.emptyIcon}>
-          👥
-        </Text>
-
-        <Text style={styles.emptyTitle}>
-          No groups
-        </Text>
-
-        <Text style={styles.emptyText}>
-          Groups you belong to will
-          appear here.
-        </Text>
-      </View>
-    );
-  };
-
-  // ===================================================
-  // LOADING
-  // ===================================================
-
-  if (
-    loadingUsers &&
-    loadingGroups
-  ) {
-    return (
-      <SafeAreaView
-        style={styles.safeArea}
+      <Pressable
+        style={({ pressed }) => [
+          styles.chatItem,
+          pressed && styles.pressed,
+        ]}
+        onPress={() =>
+          openPrivateChat(item)
+        }
       >
-        <View
-          style={styles.loadingContainer}
-        >
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {getUserInitial(item)}
+          </Text>
+        </View>
+
+        <View style={styles.chatInfo}>
+          <Text
+            style={styles.chatName}
+            numberOfLines={1}
+          >
+            {getUserName(item)}
+          </Text>
+
+          <Text style={styles.chatSubtitle}>
+            @{item.username || "user"}
+          </Text>
+        </View>
+
+        <Text style={styles.arrow}>
+          ›
+        </Text>
+      </Pressable>
+    );
+  };
+
+  // =====================================================
+  // LOADING
+  // =====================================================
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
           <ActivityIndicator
             size="large"
-            color="#007AFF"
           />
 
-          <Text
-            style={styles.loadingText}
-          >
-            Loading Kura...
+          <Text style={styles.loadingText}>
+            Loading conversations...
           </Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  // ===================================================
+  // =====================================================
   // MAIN
-  // ===================================================
+  // =====================================================
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* =============================================
+
+        {/* =================================================
             HEADER
-        ============================================= */}
+        ================================================= */}
 
         <View style={styles.header}>
           <View>
@@ -499,185 +410,52 @@ export default function HomeScreen({
             </Text>
 
             <Text style={styles.subtitle}>
-              Stay connected with your
-              friends
+              Welcome,{" "}
+              {getUserName(currentUser)}
             </Text>
           </View>
 
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={confirmLogout}
-            activeOpacity={0.7}
+          <Pressable
+            style={styles.logoutButton}
+            onPress={logout}
           >
-            <UserAvatar
-              user={currentUser}
-            />
-          </TouchableOpacity>
+            <Text style={styles.logoutText}>
+              Logout
+            </Text>
+          </Pressable>
         </View>
 
-        {/* =============================================
-            CURRENT USER
-        ============================================= */}
-
-        <View
-          style={
-            styles.currentUserCard
-          }
-        >
-          <UserAvatar
-            user={currentUser}
-          />
-
-          <View
-            style={
-              styles.currentUserInfo
-            }
-          >
-            <Text
-              style={
-                styles.currentUserName
-              }
-            >
-              {getUserName(
-                currentUser
-              )}
-            </Text>
-
-            <Text
-              style={
-                styles.currentUserUsername
-              }
-            >
-              @
-              {currentUser.username ||
-                "user"}
-            </Text>
-          </View>
-
-          <View
-            style={styles.onlineContainer}
-          >
-            <View
-              style={styles.onlineDot}
-            />
-
-            <Text
-              style={styles.onlineText}
-            >
-              Online
-            </Text>
-          </View>
-        </View>
-
-        {/* =============================================
+        {/* =================================================
             CONTENT
-        ============================================= */}
+        ================================================= */}
 
         <FlatList
-          data={users}
+          data={[
+            {
+              type: "section",
+              id: "people",
+              title: "People",
+            },
+            ...users.map((user) => ({
+              type: "user",
+              id: `user-${user._id}`,
+              user,
+            })),
+
+            {
+              type: "section",
+              id: "groups",
+              title: "Groups",
+            },
+
+            ...groups.map((group) => ({
+              type: "group",
+              id: `group-${group._id}`,
+              group,
+            })),
+          ]}
           keyExtractor={(item) =>
-            String(item._id)
-          }
-          renderItem={renderUser}
-          ListHeaderComponent={
-            <>
-              {/* PEOPLE */}
-
-              <View
-                style={styles.sectionHeader}
-              >
-                <Text
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  People
-                </Text>
-
-                <Text
-                  style={
-                    styles.sectionCount
-                  }
-                >
-                  {users.length}
-                </Text>
-              </View>
-            </>
-          }
-          ListEmptyComponent={
-            renderEmptyUsers
-          }
-          ListFooterComponent={
-            <>
-              {/* =====================================
-                  GROUPS
-              ===================================== */}
-
-              <View
-                style={[
-                  styles.sectionHeader,
-                  styles.groupsHeader,
-                ]}
-              >
-                <Text
-                  style={
-                    styles.sectionTitle
-                  }
-                >
-                  Groups
-                </Text>
-
-                <Text
-                  style={
-                    styles.sectionCount
-                  }
-                >
-                  {groups.length}
-                </Text>
-              </View>
-
-              {loadingGroups ? (
-                <View
-                  style={
-                    styles.smallLoading
-                  }
-                >
-                  <ActivityIndicator
-                    size="small"
-                    color="#007AFF"
-                  />
-
-                  <Text
-                    style={
-                      styles.smallLoadingText
-                    }
-                  >
-                    Loading groups...
-                  </Text>
-                </View>
-              ) : groups.length ===
-                0 ? (
-                renderEmptyGroups()
-              ) : (
-                groups.map((group) => (
-                  <View
-                    key={String(
-                      group._id
-                    )}
-                  >
-                    {renderGroup({
-                      item: group,
-                    })}
-                  </View>
-                ))
-              )}
-
-              <View
-                style={
-                  styles.bottomSpace
-                }
-              />
-            </>
+            item.id
           }
           refreshControl={
             <RefreshControl
@@ -685,56 +463,107 @@ export default function HomeScreen({
               onRefresh={onRefresh}
             />
           }
-          showsVerticalScrollIndicator={
-            false
-          }
           contentContainerStyle={
             styles.listContent
           }
-        />
+          renderItem={({ item }) => {
 
-        {/* =============================================
-            BOTTOM NAVIGATION
-        ============================================= */}
+            // =================================================
+            // SECTION
+            // =================================================
 
-        <View style={styles.bottomNav}>
-          <View
-            style={[
-              styles.navItem,
-              styles.activeNavItem,
-            ]}
-          >
-            <Text style={styles.navIcon}>
-              💬
-            </Text>
+            if (
+              item.type === "section"
+            ) {
+              const isPeople =
+                item.id === "people";
 
-            <Text
-              style={
-                styles.activeNavText
-              }
-            >
-              Chats
-            </Text>
-          </View>
+              return (
+                <View
+                  style={
+                    styles.sectionHeader
+                  }
+                >
+                  <Text
+                    style={
+                      styles.sectionTitle
+                    }
+                  >
+                    {item.title}
+                  </Text>
 
-          <TouchableOpacity
-            style={styles.navItem}
-            onPress={() =>
-              Alert.alert(
-                "Coming Soon",
-                "Settings will be added soon."
-              )
+                  {isPeople &&
+                    userError && (
+                      <Text
+                        style={
+                          styles.errorText
+                        }
+                      >
+                        {userError}
+                      </Text>
+                    )}
+
+                  {!isPeople &&
+                    groupError && (
+                      <Text
+                        style={
+                          styles.errorText
+                        }
+                      >
+                        {groupError}
+                      </Text>
+                    )}
+                </View>
+              );
             }
-          >
-            <Text style={styles.navIcon}>
-              ⚙️
-            </Text>
 
-            <Text style={styles.navText}>
-              Settings
-            </Text>
-          </TouchableOpacity>
-        </View>
+            // =================================================
+            // USER
+            // =================================================
+
+            if (
+              item.type === "user"
+            ) {
+              return renderUser({
+                item: item.user,
+              });
+            }
+
+            // =================================================
+            // GROUP
+            // =================================================
+
+            if (
+              item.type === "group"
+            ) {
+              return renderGroup({
+                item: item.group,
+              });
+            }
+
+            return null;
+          }}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyIcon}>
+                💬
+              </Text>
+
+              <Text
+                style={styles.emptyTitle}
+              >
+                No conversations
+              </Text>
+
+              <Text
+                style={styles.emptyText}
+              >
+                No users or groups are
+                available yet.
+              </Text>
+            </View>
+          }
+        />
       </View>
     </SafeAreaView>
   );
@@ -747,336 +576,211 @@ export default function HomeScreen({
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#F7F8FA",
+    backgroundColor: "#F8FAFC",
   },
 
   container: {
     flex: 1,
-    backgroundColor: "#F7F8FA",
   },
 
-  // ================================================
+  // ===================================================
   // LOADING
-  // ================================================
+  // ===================================================
 
   loadingContainer: {
     flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F7F8FA",
+    justifyContent: "center",
   },
 
   loadingText: {
     marginTop: 12,
-    fontSize: 16,
-    color: "#666",
-  },
-
-  smallLoading: {
-    paddingVertical: 20,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  smallLoadingText: {
-    marginLeft: 10,
     fontSize: 14,
-    color: "#777",
+    color: "#6B7280",
   },
 
-  // ================================================
+  // ===================================================
   // HEADER
-  // ================================================
+  // ===================================================
 
   header: {
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: "#FFFFFF",
   },
 
   title: {
-    fontSize: 30,
-    fontWeight: "700",
+    fontSize: 26,
+    fontWeight: "800",
     color: "#111827",
   },
 
   subtitle: {
-    marginTop: 3,
-    fontSize: 14,
-    color: "#8A8F98",
-  },
-
-  profileButton: {
-    padding: 2,
-  },
-
-  // ================================================
-  // CURRENT USER
-  // ================================================
-
-  currentUserCard: {
-    marginHorizontal: 16,
-    marginTop: 14,
-    marginBottom: 8,
-    padding: 14,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 16,
-    flexDirection: "row",
-    alignItems: "center",
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-
-    elevation: 2,
-  },
-
-  currentUserInfo: {
-    flex: 1,
-    marginLeft: 12,
-  },
-
-  currentUserName: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#17191C",
-  },
-
-  currentUserUsername: {
-    marginTop: 2,
+    marginTop: 4,
     fontSize: 13,
-    color: "#858A91",
+    color: "#6B7280",
   },
 
-  onlineContainer: {
-    flexDirection: "row",
-    alignItems: "center",
+  logoutButton: {
+    backgroundColor: "#FEE2E2",
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: 9,
   },
 
-  onlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#34C759",
-    marginRight: 5,
-  },
-
-  onlineText: {
+  logoutText: {
+    color: "#DC2626",
     fontSize: 12,
-    color: "#34C759",
-    fontWeight: "600",
+    fontWeight: "700",
   },
 
-  // ================================================
-  // SECTIONS
-  // ================================================
+  // ===================================================
+  // LIST
+  // ===================================================
+
+  listContent: {
+    paddingBottom: 30,
+  },
 
   sectionHeader: {
-    marginTop: 18,
-    marginBottom: 8,
     paddingHorizontal: 20,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-
-  groupsHeader: {
-    marginTop: 28,
+    paddingTop: 22,
+    paddingBottom: 8,
   },
 
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#20242A",
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#374151",
   },
 
-  sectionCount: {
-    marginLeft: 8,
-    minWidth: 24,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    textAlign: "center",
-    borderRadius: 10,
-    overflow: "hidden",
-    backgroundColor: "#E9F2FF",
-    color: "#007AFF",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-
-  // ================================================
+  // ===================================================
   // CHAT ITEM
-  // ================================================
+  // ===================================================
 
   chatItem: {
-    marginHorizontal: 16,
-    marginVertical: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 14,
+    minHeight: 72,
     backgroundColor: "#FFFFFF",
+
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+
     flexDirection: "row",
     alignItems: "center",
 
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 1,
-    },
-    shadowOpacity: 0.03,
-    shadowRadius: 3,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
 
-    elevation: 1,
+  pressed: {
+    opacity: 0.7,
   },
 
   chatInfo: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 13,
   },
 
   chatName: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#181B1F",
+    fontWeight: "700",
+    color: "#111827",
   },
 
-  chatUsername: {
-    marginTop: 3,
+  chatSubtitle: {
+    marginTop: 4,
     fontSize: 13,
-    color: "#858A91",
+    color: "#6B7280",
   },
 
-  chevron: {
-    marginLeft: 8,
+  arrow: {
     fontSize: 28,
-    lineHeight: 28,
-    color: "#B4B8BE",
+    color: "#9CA3AF",
+    marginLeft: 10,
   },
 
-  // ================================================
-  // AVATAR
-  // ================================================
+  // ===================================================
+  // USER AVATAR
+  // ===================================================
 
   avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#E9EEF5",
-    justifyContent: "center",
-    alignItems: "center",
-    overflow: "hidden",
-  },
+    width: 48,
+    height: 48,
+    borderRadius: 24,
 
-  avatarImage: {
-    width: "100%",
-    height: "100%",
+    backgroundColor: "#E0E7FF",
+
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   avatarText: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#4B5563",
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#3730A3",
   },
+
+  // ===================================================
+  // GROUP AVATAR
+  // ===================================================
 
   groupAvatar: {
-    backgroundColor: "#E8F1FF",
-  },
+    width: 48,
+    height: 48,
+    borderRadius: 24,
 
-  groupEmoji: {
-    fontSize: 24,
-  },
+    backgroundColor: "#EDE9FE",
 
-  // ================================================
-  // EMPTY
-  // ================================================
-
-  emptySection: {
-    marginHorizontal: 20,
-    marginTop: 12,
-    marginBottom: 10,
-    padding: 25,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
     alignItems: "center",
+    justifyContent: "center",
+  },
+
+  groupAvatarText: {
+    fontSize: 23,
+  },
+
+  // ===================================================
+  // ERROR
+  // ===================================================
+
+  errorText: {
+    marginTop: 5,
+    color: "#DC2626",
+    fontSize: 12,
+  },
+
+  // ===================================================
+  // EMPTY
+  // ===================================================
+
+  empty: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 30,
+    paddingTop: 100,
   },
 
   emptyIcon: {
-    fontSize: 30,
-    marginBottom: 8,
+    fontSize: 50,
+    marginBottom: 15,
   },
 
   emptyTitle: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#30343A",
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#111827",
   },
 
   emptyText: {
-    marginTop: 5,
-    fontSize: 13,
-    color: "#8A8F98",
+    marginTop: 7,
     textAlign: "center",
-  },
-
-  // ================================================
-  // LIST
-  // ================================================
-
-  listContent: {
-    paddingBottom: 10,
-  },
-
-  bottomSpace: {
-    height: 20,
-  },
-
-  // ================================================
-  // BOTTOM NAV
-  // ================================================
-
-  bottomNav: {
-    height: 70,
-    paddingBottom: 8,
-    backgroundColor: "#FFFFFF",
-    borderTopWidth: 1,
-    borderTopColor: "#E8E9EB",
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-  },
-
-  navItem: {
-    flex: 1,
-    height: 60,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  activeNavItem: {
-    opacity: 1,
-  },
-
-  navIcon: {
-    fontSize: 22,
-    marginBottom: 3,
-  },
-
-  navText: {
-    fontSize: 12,
-    color: "#8A8F98",
-  },
-
-  activeNavText: {
-    fontSize: 12,
-    color: "#007AFF",
-    fontWeight: "700",
+    color: "#6B7280",
+    lineHeight: 21,
   },
 });
