@@ -1,23 +1,30 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const multer = require("multer");
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const {
+  CloudinaryStorage,
+} = require("multer-storage-cloudinary");
 
 const cloudinary = require("../config/cloudinary");
 const User = require("../models/User");
 
 const router = express.Router();
 
-// ==========================================
-// PROFILE PHOTO UPLOAD - CLOUDINARY
-// ==========================================
+// =====================================================
+// CLOUDINARY PROFILE PHOTO STORAGE
+// =====================================================
 
 const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
 
   params: {
     folder: "kura/profiles",
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    allowed_formats: [
+      "jpg",
+      "jpeg",
+      "png",
+      "webp",
+    ],
   },
 });
 
@@ -32,169 +39,226 @@ const upload = multer({
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
     } else {
-      cb(new Error("Only image files are allowed"));
+      cb(
+        new Error(
+          "Only image files are allowed."
+        )
+      );
     }
   },
 });
 
-// ==========================================
+// =====================================================
 // REGISTER
-// ==========================================
+// POST /api/users/register
+// =====================================================
 
 router.post(
   "/register",
   upload.single("profilePhoto"),
   async (req, res) => {
     try {
-      const { name, username, password } = req.body;
+      const {
+        name,
+        username,
+        password,
+      } = req.body;
 
-      if (!name || !username || !password) {
+      if (
+        !name ||
+        !username ||
+        !password
+      ) {
         return res.status(400).json({
-          message: "Name, username and password are required",
+          message:
+            "Name, username and password are required.",
         });
       }
 
       if (password.length < 6) {
         return res.status(400).json({
-          message: "Password must be at least 6 characters",
+          message:
+            "Password must be at least 6 characters.",
         });
       }
 
-      const cleanUsername = username.trim().toLowerCase();
+      const cleanUsername =
+        username.trim().toLowerCase();
 
-      const existingUser = await User.findOne({
-        username: cleanUsername,
-      });
+      const existingUser =
+        await User.findOne({
+          username: cleanUsername,
+        });
 
       if (existingUser) {
         return res.status(400).json({
-          message: "Username already exists",
+          message:
+            "Username already exists.",
         });
       }
 
-      // ==========================================
-      // HASH PASSWORD
-      // ==========================================
+      // Hash password
+      const hashedPassword =
+        await bcrypt.hash(
+          password,
+          10
+        );
 
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // ==========================================
-      // CLOUDINARY PROFILE PHOTO
-      // ==========================================
-
+      // Cloudinary URL
       let profilePhoto = "";
 
       if (req.file) {
-        profilePhoto = req.file.path;
+        profilePhoto =
+          req.file.path;
       }
 
-      // ==========================================
-      // CREATE USER
-      // ==========================================
+      const user =
+        await User.create({
+          name: name.trim(),
 
-      const user = await User.create({
-        name: name.trim(),
-        username: cleanUsername,
-        password: hashedPassword,
-        profilePhoto,
-      });
+          username:
+            cleanUsername,
 
-      // ==========================================
-      // RESPONSE
-      // ==========================================
+          password:
+            hashedPassword,
 
-      res.status(201).json({
-        message: "User registered successfully",
+          profilePhoto,
+        });
 
-        user: {
-          _id: user._id,
-          name: user.name,
-          username: user.username,
-          profilePhoto: user.profilePhoto,
-        },
+      const safeUser =
+        await User.findById(
+          user._id
+        ).select("-password");
+
+      return res.status(201).json({
+        message:
+          "User registered successfully.",
+
+        user: safeUser,
       });
     } catch (error) {
-      console.error("Registration error:", error);
+      console.error(
+        "Registration error:",
+        error
+      );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not register user.",
       });
     }
   }
 );
 
-// ==========================================
+// =====================================================
 // LOGIN
-// ==========================================
+// POST /api/users/login
+// =====================================================
 
-router.post("/login", async (req, res) => {
-  try {
-    const { username, password } = req.body;
+router.post(
+  "/login",
+  async (req, res) => {
+    try {
+      const {
+        username,
+        password,
+      } = req.body;
 
-    if (!username || !password) {
-      return res.status(400).json({
-        message: "Username and password are required",
+      if (
+        !username ||
+        !password
+      ) {
+        return res.status(400).json({
+          message:
+            "Username and password are required.",
+        });
+      }
+
+      const cleanUsername =
+        username
+          .trim()
+          .toLowerCase();
+
+      const user =
+        await User.findOne({
+          username:
+            cleanUsername,
+        });
+
+      if (!user) {
+        return res.status(401).json({
+          message:
+            "Invalid username or password.",
+        });
+      }
+
+      const passwordMatch =
+        await bcrypt.compare(
+          password,
+          user.password
+        );
+
+      if (!passwordMatch) {
+        return res.status(401).json({
+          message:
+            "Invalid username or password.",
+        });
+      }
+
+      const safeUser =
+        await User.findById(
+          user._id
+        ).select("-password");
+
+      return res.json({
+        message:
+          "Login successful.",
+
+        user: safeUser,
+      });
+    } catch (error) {
+      console.error(
+        "Login error:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Could not login.",
       });
     }
-
-    const user = await User.findOne({
-      username: username.trim().toLowerCase(),
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        message: "Invalid username or password",
-      });
-    }
-
-    const passwordMatch = await bcrypt.compare(
-      password,
-      user.password
-    );
-
-    if (!passwordMatch) {
-      return res.status(401).json({
-        message: "Invalid username or password",
-      });
-    }
-
-    res.json({
-      message: "Login successful",
-
-      user: {
-        _id: user._id,
-        name: user.name,
-        username: user.username,
-        profilePhoto: user.profilePhoto,
-      },
-    });
-  } catch (error) {
-    console.error("Login error:", error);
-
-    res.status(500).json({
-      message: "Server error",
-    });
   }
-});
+);
 
-// ==========================================
+// =====================================================
 // GET ALL USERS
-// ==========================================
+// GET /api/users
+// =====================================================
 
-router.get("/", async (req, res) => {
-  try {
-    const users = await User.find()
-      .select("-password")
-      .sort({ username: 1 });
+router.get(
+  "/",
+  async (req, res) => {
+    try {
+      const users =
+        await User.find()
+          .select("-password")
+          .sort({
+            username: 1,
+          });
 
-    res.json(users);
-  } catch (error) {
-    console.error("Get users error:", error);
+      return res.json(users);
+    } catch (error) {
+      console.error(
+        "Get users error:",
+        error
+      );
 
-    res.status(500).json({
-      message: "Server error",
-    });
+      return res.status(500).json({
+        message:
+          "Could not load users.",
+      });
+    }
   }
-});
+);
 
 module.exports = router;

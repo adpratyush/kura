@@ -8,18 +8,18 @@ const groupSchema = new mongoose.Schema(
       trim: true,
     },
 
+    admin: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+
     members: [
       {
         type: mongoose.Schema.Types.ObjectId,
         ref: "User",
       },
     ],
-
-    admin: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
 
     groupPhoto: {
       type: String,
@@ -31,4 +31,6 @@ const groupSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Group", groupSchema);
+module.exports =
+  mongoose.models.Group ||
+  mongoose.model("Group", groupSchema);

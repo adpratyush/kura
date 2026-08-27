@@ -1,41 +1,32 @@
 const express = require("express");
 const multer = require("multer");
-const path = require("path");
+const {
+  CloudinaryStorage,
+} = require("multer-storage-cloudinary");
+
+const cloudinary = require("../config/cloudinary");
 
 const Message = require("../models/Message");
 const Group = require("../models/Group");
+const User = require("../models/User");
 
 const router = express.Router();
 
 // =====================================================
-// MULTER IMAGE UPLOAD CONFIGURATION
-// =====================================================
-//
-// NOTE:
-// This is your existing local upload system.
-// If you have already moved message images to
-// Cloudinary, we can replace this section with
-// Cloudinary later.
-//
+// CLOUDINARY MESSAGE IMAGE STORAGE
 // =====================================================
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, "uploads/");
-  },
+const storage = new CloudinaryStorage({
+  cloudinary,
 
-  filename: (req, file, cb) => {
-    const extension = path.extname(
-      file.originalname
-    );
-
-    const filename =
-      Date.now() +
-      "-" +
-      Math.round(Math.random() * 1e9) +
-      extension;
-
-    cb(null, filename);
+  params: {
+    folder: "kura/messages",
+    allowed_formats: [
+      "jpg",
+      "jpeg",
+      "png",
+      "webp",
+    ],
   },
 });
 
@@ -52,7 +43,7 @@ const upload = multer({
     } else {
       cb(
         new Error(
-          "Only image files are allowed"
+          "Only image files are allowed."
         )
       );
     }
@@ -60,7 +51,8 @@ const upload = multer({
 });
 
 // =====================================================
-// UPLOAD IMAGE
+// UPLOAD MESSAGE IMAGE
+// POST /api/messages/upload-image
 // =====================================================
 
 router.post(
@@ -70,28 +62,26 @@ router.post(
     try {
       if (!req.file) {
         return res.status(400).json({
-          message: "No image uploaded",
+          message:
+            "No image uploaded.",
         });
       }
 
-      const imageUrl =
-        `/uploads/${req.file.filename}`;
+      return res.status(201).json({
+        success: true,
 
-      res.status(201).json({
-        message:
-          "Image uploaded successfully",
-
-        imageUrl,
+        imageUrl:
+          req.file.path,
       });
     } catch (error) {
       console.error(
-        "Image upload error:",
+        "Message image upload error:",
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
         message:
-          "Image upload failed",
+          "Image upload failed.",
       });
     }
   }
@@ -99,6 +89,7 @@ router.post(
 
 // =====================================================
 // SEND PRIVATE MESSAGE
+// POST /api/messages/private
 // =====================================================
 
 router.post(
@@ -113,34 +104,67 @@ router.post(
         imageUrl = "",
       } = req.body;
 
-      // -----------------------------------------------
-      // VALIDATE USERS
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // VALIDATION
+      // -------------------------------------------------
 
       if (!sender || !receiver) {
         return res.status(400).json({
           message:
-            "Sender and receiver are required",
+            "Sender and receiver are required.",
         });
       }
 
-      // -----------------------------------------------
-      // VALIDATE TEXT
-      // -----------------------------------------------
+      if (
+        !User.db
+      ) {
+        return res.status(500).json({
+          message:
+            "Database unavailable.",
+        });
+      }
+
+      // -------------------------------------------------
+      // CHECK USERS
+      // -------------------------------------------------
+
+      const senderUser =
+        await User.findById(sender);
+
+      const receiverUser =
+        await User.findById(receiver);
+
+      if (!senderUser) {
+        return res.status(404).json({
+          message:
+            "Sender not found.",
+        });
+      }
+
+      if (!receiverUser) {
+        return res.status(404).json({
+          message:
+            "Receiver not found.",
+        });
+      }
+
+      // -------------------------------------------------
+      // TEXT VALIDATION
+      // -------------------------------------------------
 
       if (
-        type === "text" &&
-        !message.trim()
+        type !== "image" &&
+        !String(message).trim()
       ) {
         return res.status(400).json({
           message:
-            "Message cannot be empty",
+            "Message cannot be empty.",
         });
       }
 
-      // -----------------------------------------------
-      // VALIDATE IMAGE
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // IMAGE VALIDATION
+      // -------------------------------------------------
 
       if (
         type === "image" &&
@@ -148,25 +172,31 @@ router.post(
       ) {
         return res.status(400).json({
           message:
-            "Image URL is required",
+            "Image URL is required.",
         });
       }
 
-      // -----------------------------------------------
-      // SAVE MESSAGE ONCE
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // SAVE ONCE
+      // -------------------------------------------------
 
       const newMessage =
         await Message.create({
           sender,
+
           receiver,
 
-          type,
+          type:
+            type === "image"
+              ? "image"
+              : "text",
 
           message:
-            type === "text"
-              ? message.trim()
-              : "",
+            type === "image"
+              ? ""
+              : String(
+                  message
+                ).trim(),
 
           imageUrl:
             type === "image"
@@ -174,9 +204,9 @@ router.post(
               : "",
         });
 
-      // -----------------------------------------------
-      // POPULATE MESSAGE
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // POPULATE
+      // -------------------------------------------------
 
       const populatedMessage =
         await Message.findById(
@@ -191,41 +221,43 @@ router.post(
             "username name profilePhoto"
           );
 
-      // -----------------------------------------------
-      // BROADCAST TO PRIVATE ROOM
-      // -----------------------------------------------
-      //
-      // IMPORTANT:
-      //
-      // The server broadcasts the SAME MongoDB
-      // message that was saved above.
-      //
-      // This includes _id.
-      //
-      // We do NOT broadcast from App.jsx anymore.
-      //
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // SOCKET.IO BROADCAST
+      // -------------------------------------------------
 
       const io =
         req.app.get("io");
 
       if (io) {
-        const roomId = [
-          String(sender),
-          String(receiver),
-        ]
-          .sort()
-          .join("_");
+        const roomId =
+          getPrivateRoomId(
+            sender,
+            receiver
+          );
 
         io.to(roomId).emit(
           "new_message",
           populatedMessage
         );
+
+        // Also send to receiver's
+        // personal room.
+        //
+        // This allows the receiver to
+        // receive notifications even when
+        // they aren't inside the chat.
+
+        io.to(
+          `user_${String(receiver)}`
+        ).emit(
+          "new_message",
+          populatedMessage
+        );
       }
 
-      // -----------------------------------------------
-      // RETURN MESSAGE TO SENDER
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // RESPONSE
+      // -------------------------------------------------
 
       return res.status(201).json(
         populatedMessage
@@ -238,7 +270,7 @@ router.post(
 
       return res.status(500).json({
         message:
-          "Server error",
+          "Could not send message.",
       });
     }
   }
@@ -246,6 +278,7 @@ router.post(
 
 // =====================================================
 // GET PRIVATE CONVERSATION
+// GET /api/messages/private/:user1/:user2
 // =====================================================
 
 router.get(
@@ -292,7 +325,7 @@ router.get(
 
       return res.status(500).json({
         message:
-          "Server error",
+          "Could not load messages.",
       });
     }
   }
@@ -300,6 +333,7 @@ router.get(
 
 // =====================================================
 // SEND GROUP MESSAGE
+// POST /api/messages/group
 // =====================================================
 
 router.post(
@@ -314,20 +348,20 @@ router.post(
         imageUrl = "",
       } = req.body;
 
-      // -----------------------------------------------
-      // VALIDATE SENDER AND GROUP
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // VALIDATION
+      // -------------------------------------------------
 
       if (!sender || !group) {
         return res.status(400).json({
           message:
-            "Sender and group are required",
+            "Sender and group are required.",
         });
       }
 
-      // -----------------------------------------------
+      // -------------------------------------------------
       // FIND GROUP
-      // -----------------------------------------------
+      // -------------------------------------------------
 
       const existingGroup =
         await Group.findById(group);
@@ -335,45 +369,41 @@ router.post(
       if (!existingGroup) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
-      // -----------------------------------------------
-      // CHECK GROUP MEMBERSHIP
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // CHECK MEMBERSHIP
+      // -------------------------------------------------
 
       const isMember =
         existingGroup.members.some(
-          (member) =>
-            String(member) ===
+          (memberId) =>
+            String(memberId) ===
             String(sender)
         );
 
       if (!isMember) {
         return res.status(403).json({
           message:
-            "You are not a member of this group",
+            "You are not a member of this group.",
         });
       }
 
-      // -----------------------------------------------
-      // VALIDATE TEXT
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // VALIDATE MESSAGE
+      // -------------------------------------------------
 
       if (
-        type === "text" &&
-        !message.trim()
+        type !== "image" &&
+        !String(message).trim()
       ) {
         return res.status(400).json({
           message:
-            "Message cannot be empty",
+            "Message cannot be empty.",
         });
       }
-
-      // -----------------------------------------------
-      // VALIDATE IMAGE
-      // -----------------------------------------------
 
       if (
         type === "image" &&
@@ -381,25 +411,31 @@ router.post(
       ) {
         return res.status(400).json({
           message:
-            "Image URL is required",
+            "Image URL is required.",
         });
       }
 
-      // -----------------------------------------------
+      // -------------------------------------------------
       // SAVE MESSAGE ONCE
-      // -----------------------------------------------
+      // -------------------------------------------------
 
       const newMessage =
         await Message.create({
           sender,
+
           group,
 
-          type,
+          type:
+            type === "image"
+              ? "image"
+              : "text",
 
           message:
-            type === "text"
-              ? message.trim()
-              : "",
+            type === "image"
+              ? ""
+              : String(
+                  message
+                ).trim(),
 
           imageUrl:
             type === "image"
@@ -407,9 +443,9 @@ router.post(
               : "",
         });
 
-      // -----------------------------------------------
-      // POPULATE MESSAGE
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // POPULATE
+      // -------------------------------------------------
 
       const populatedMessage =
         await Message.findById(
@@ -421,38 +457,50 @@ router.post(
           )
           .populate(
             "group",
-            "name"
+            "name groupPhoto"
           );
 
-      // -----------------------------------------------
-      // BROADCAST TO GROUP
-      // -----------------------------------------------
-      //
-      // IMPORTANT:
-      //
-      // The server broadcasts the actual
-      // MongoDB message containing _id.
-      //
-      // Every connected group member receives
-      // exactly this message.
-      //
-      // -----------------------------------------------
+      // -------------------------------------------------
+      // SOCKET.IO BROADCAST
+      // -------------------------------------------------
 
       const io =
         req.app.get("io");
 
       if (io) {
-        io.to(
-          String(group)
-        ).emit(
+        const roomId =
+          `group_${String(group)}`;
+
+        io.to(roomId).emit(
           "new_group_message",
           populatedMessage
         );
-      }
 
-      // -----------------------------------------------
-      // RETURN MESSAGE TO SENDER
-      // -----------------------------------------------
+        // Also notify members personally.
+        //
+        // We don't send this to the sender because
+        // sender already received it through the group
+        // room.
+
+        for (
+          const memberId of
+            existingGroup.members
+        ) {
+          if (
+            String(memberId) ===
+            String(sender)
+          ) {
+            continue;
+          }
+
+          io.to(
+            `user_${String(memberId)}`
+          ).emit(
+            "new_group_message",
+            populatedMessage
+          );
+        }
+      }
 
       return res.status(201).json(
         populatedMessage
@@ -465,14 +513,15 @@ router.post(
 
       return res.status(500).json({
         message:
-          "Server error",
+          "Could not send group message.",
       });
     }
   }
 );
 
 // =====================================================
-// GET GROUP CONVERSATION
+// GET GROUP MESSAGES
+// GET /api/messages/group/:groupId
 // =====================================================
 
 router.get(
@@ -493,7 +542,7 @@ router.get(
           )
           .populate(
             "group",
-            "name"
+            "name groupPhoto"
           )
           .sort({
             createdAt: 1,
@@ -508,11 +557,27 @@ router.get(
 
       return res.status(500).json({
         message:
-          "Server error",
+          "Could not load group messages.",
       });
     }
   }
 );
+
+// =====================================================
+// PRIVATE ROOM HELPER
+// =====================================================
+
+function getPrivateRoomId(
+  user1,
+  user2
+) {
+  return [
+    String(user1),
+    String(user2),
+  ]
+    .sort()
+    .join("_");
+}
 
 // =====================================================
 // EXPORT

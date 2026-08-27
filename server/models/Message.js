@@ -29,7 +29,6 @@ const messageSchema = new mongoose.Schema(
     message: {
       type: String,
       default: "",
-      trim: true,
     },
 
     imageUrl: {
@@ -42,4 +41,6 @@ const messageSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Message", messageSchema);
+module.exports =
+  mongoose.models.Message ||
+  mongoose.model("Message", messageSchema);

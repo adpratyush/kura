@@ -1,174 +1,193 @@
 const express = require("express");
+
 const Group = require("../models/Group");
 const User = require("../models/User");
 
 const router = express.Router();
 
-// ======================================================
+// =====================================================
 // CREATE GROUP
 // POST /api/groups
-// ======================================================
+// =====================================================
 
-router.post("/", async (req, res) => {
-  try {
-    const {
-      name,
-      admin,
-      members = [],
-      groupPhoto = "",
-    } = req.body;
+router.post(
+  "/",
+  async (req, res) => {
+    try {
+      const {
+        name,
+        admin,
+        members = [],
+        groupPhoto = "",
+      } = req.body;
 
-    // Validate group name
-    if (!name || !name.trim()) {
-      return res.status(400).json({
-        message: "Group name is required",
-      });
-    }
+      if (
+        !name ||
+        !name.trim()
+      ) {
+        return res.status(400).json({
+          message:
+            "Group name is required.",
+        });
+      }
 
-    // Validate admin
-    if (!admin) {
-      return res.status(400).json({
-        message: "Admin is required",
-      });
-    }
+      if (!admin) {
+        return res.status(400).json({
+          message:
+            "Admin is required.",
+        });
+      }
 
-    // Check admin exists
-    const adminUser = await User.findById(admin);
+      const adminUser =
+        await User.findById(admin);
 
-    if (!adminUser) {
-      return res.status(404).json({
-        message: "Admin user not found",
-      });
-    }
+      if (!adminUser) {
+        return res.status(404).json({
+          message:
+            "Admin user not found.",
+        });
+      }
 
-    // Make sure members is an array
-    let groupMembers = Array.isArray(
-      members
-    )
-      ? members
-      : [];
-
-    // Add admin automatically
-    groupMembers.push(admin);
-
-    // Remove duplicates
-    groupMembers = [
-      ...new Set(
-        groupMembers.map((id) =>
-          id.toString()
+      let memberIds =
+        Array.isArray(
+          members
         )
-      ),
-    ];
+          ? members
+          : [];
 
-    // Check that all users exist
-    const existingUsers =
-      await User.find({
-        _id: {
-          $in: groupMembers,
-        },
-      }).select("_id");
+      // Add admin
+      memberIds.push(admin);
 
-    if (
-      existingUsers.length !==
-      groupMembers.length
-    ) {
-      return res.status(400).json({
-        message:
-          "One or more selected users do not exist",
-      });
-    }
-
-    // Create group
-    const group = await Group.create({
-      name: name.trim(),
-
-      admin,
-
-      members: groupMembers,
-
-      groupPhoto:
-        groupPhoto || "",
-    });
-
-    // Populate group
-    const populatedGroup =
-      await Group.findById(
-        group._id
-      )
-        .populate(
-          "admin",
-          "username name profilePhoto"
-        )
-        .populate(
-          "members",
-          "username name profilePhoto"
+      // Convert to strings
+      memberIds =
+        memberIds.map((id) =>
+          String(id)
         );
 
-    res.status(201).json({
-      message:
-        "Group created successfully",
+      // Remove duplicates
+      memberIds = [
+        ...new Set(
+          memberIds
+        ),
+      ];
 
-      group: populatedGroup,
-    });
-  } catch (error) {
-    console.error(
-      "Create group error:",
-      error
-    );
+      // Check users
+      const existingUsers =
+        await User.find({
+          _id: {
+            $in: memberIds,
+          },
+        }).select("_id");
 
-    res.status(500).json({
-      message: "Server error",
-    });
-  }
-});
+      if (
+        existingUsers.length !==
+        memberIds.length
+      ) {
+        return res.status(400).json({
+          message:
+            "One or more selected users do not exist.",
+        });
+      }
 
-// ======================================================
-// GET ALL GROUPS
-// GET /api/groups
-// ======================================================
+      const group =
+        await Group.create({
+          name:
+            name.trim(),
 
-router.get("/", async (req, res) => {
-  try {
-    const groups =
-      await Group.find()
-        .populate(
-          "admin",
-          "username name profilePhoto"
-        )
-        .populate(
-          "members",
-          "username name profilePhoto"
-        )
-        .sort({
-          createdAt: -1,
+          admin,
+
+          members:
+            memberIds,
+
+          groupPhoto:
+            groupPhoto || "",
         });
 
-    res.json(groups);
-  } catch (error) {
-    console.error(
-      "Get groups error:",
-      error
-    );
+      const populatedGroup =
+        await Group.findById(
+          group._id
+        )
+          .populate(
+            "admin",
+            "username name profilePhoto"
+          )
+          .populate(
+            "members",
+            "username name profilePhoto"
+          );
 
-    res.status(500).json({
-      message: "Server error",
-    });
+      return res.status(201).json({
+        message:
+          "Group created successfully.",
+
+        group:
+          populatedGroup,
+      });
+    } catch (error) {
+      console.error(
+        "Create group error:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Could not create group.",
+      });
+    }
   }
-});
+);
 
-// ======================================================
-// GET GROUPS FOR USER
+// =====================================================
+// GET ALL GROUPS
+// GET /api/groups
+// =====================================================
+
+router.get(
+  "/",
+  async (req, res) => {
+    try {
+      const groups =
+        await Group.find()
+          .populate(
+            "admin",
+            "username name profilePhoto"
+          )
+          .populate(
+            "members",
+            "username name profilePhoto"
+          )
+          .sort({
+            createdAt: -1,
+          });
+
+      return res.json(groups);
+    } catch (error) {
+      console.error(
+        "Get groups error:",
+        error
+      );
+
+      return res.status(500).json({
+        message:
+          "Could not load groups.",
+      });
+    }
+  }
+);
+
+// =====================================================
+// GET USER GROUPS
 // GET /api/groups/user/:userId
-// ======================================================
+// =====================================================
 
 router.get(
   "/user/:userId",
   async (req, res) => {
     try {
-      const { userId } =
-        req.params;
+      const {
+        userId,
+      } = req.params;
 
-      // Check user exists
       const user =
         await User.findById(
           userId
@@ -177,7 +196,7 @@ router.get(
       if (!user) {
         return res.status(404).json({
           message:
-            "User not found",
+            "User not found.",
         });
       }
 
@@ -197,24 +216,25 @@ router.get(
             createdAt: -1,
           });
 
-      res.json(groups);
+      return res.json(groups);
     } catch (error) {
       console.error(
         "Get user groups error:",
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not load groups.",
       });
     }
   }
 );
 
-// ======================================================
+// =====================================================
 // GET SINGLE GROUP
 // GET /api/groups/:groupId
-// ======================================================
+// =====================================================
 
 router.get(
   "/:groupId",
@@ -236,28 +256,29 @@ router.get(
       if (!group) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
-      res.json(group);
+      return res.json(group);
     } catch (error) {
       console.error(
         "Get group error:",
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not load group.",
       });
     }
   }
 );
 
-// ======================================================
+// =====================================================
 // ADD MEMBER
 // POST /api/groups/:groupId/members
-// ======================================================
+// =====================================================
 
 router.post(
   "/:groupId/members",
@@ -270,7 +291,7 @@ router.post(
       if (!userId) {
         return res.status(400).json({
           message:
-            "User ID is required",
+            "User ID is required.",
         });
       }
 
@@ -282,7 +303,7 @@ router.post(
       if (!group) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
@@ -294,22 +315,21 @@ router.post(
       if (!user) {
         return res.status(404).json({
           message:
-            "User not found",
+            "User not found.",
         });
       }
 
-      // Check if already member
       const alreadyMember =
         group.members.some(
           (member) =>
-            member.toString() ===
-            userId.toString()
+            String(member) ===
+            String(userId)
         );
 
       if (alreadyMember) {
         return res.status(400).json({
           message:
-            "User is already a member",
+            "User is already a member.",
         });
       }
 
@@ -332,9 +352,9 @@ router.post(
             "username name profilePhoto"
           );
 
-      res.json({
+      return res.json({
         message:
-          "Member added successfully",
+          "Member added successfully.",
 
         group:
           updatedGroup,
@@ -345,17 +365,18 @@ router.post(
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not add member.",
       });
     }
   }
 );
 
-// ======================================================
+// =====================================================
 // REMOVE MEMBER
 // DELETE /api/groups/:groupId/members/:userId
-// ======================================================
+// =====================================================
 
 router.delete(
   "/:groupId/members/:userId",
@@ -374,40 +395,39 @@ router.delete(
       if (!group) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
-      // Admin cannot be removed
       if (
-        group.admin.toString() ===
-        userId.toString()
+        String(group.admin) ===
+        String(userId)
       ) {
         return res.status(400).json({
           message:
-            "Admin cannot be removed from the group",
+            "Admin cannot be removed.",
         });
       }
 
       const isMember =
         group.members.some(
           (member) =>
-            member.toString() ===
-            userId.toString()
+            String(member) ===
+            String(userId)
         );
 
       if (!isMember) {
         return res.status(400).json({
           message:
-            "User is not a member of this group",
+            "User is not a member.",
         });
       }
 
       group.members =
         group.members.filter(
           (member) =>
-            member.toString() !==
-            userId.toString()
+            String(member) !==
+            String(userId)
         );
 
       await group.save();
@@ -425,9 +445,9 @@ router.delete(
             "username name profilePhoto"
           );
 
-      res.json({
+      return res.json({
         message:
-          "Member removed successfully",
+          "Member removed successfully.",
 
         group:
           updatedGroup,
@@ -438,17 +458,18 @@ router.delete(
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not remove member.",
       });
     }
   }
 );
 
-// ======================================================
+// =====================================================
 // UPDATE GROUP
 // PUT /api/groups/:groupId
-// ======================================================
+// =====================================================
 
 router.put(
   "/:groupId",
@@ -467,17 +488,19 @@ router.put(
       if (!group) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
       if (
         name !== undefined
       ) {
-        if (!name.trim()) {
+        if (
+          !name.trim()
+        ) {
           return res.status(400).json({
             message:
-              "Group name cannot be empty",
+              "Group name cannot be empty.",
           });
         }
 
@@ -508,9 +531,9 @@ router.put(
             "username name profilePhoto"
           );
 
-      res.json({
+      return res.json({
         message:
-          "Group updated successfully",
+          "Group updated successfully.",
 
         group:
           updatedGroup,
@@ -521,17 +544,18 @@ router.put(
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not update group.",
       });
     }
   }
 );
 
-// ======================================================
+// =====================================================
 // DELETE GROUP
 // DELETE /api/groups/:groupId
-// ======================================================
+// =====================================================
 
 router.delete(
   "/:groupId",
@@ -545,7 +569,7 @@ router.delete(
       if (!group) {
         return res.status(404).json({
           message:
-            "Group not found",
+            "Group not found.",
         });
       }
 
@@ -553,9 +577,9 @@ router.delete(
         req.params.groupId
       );
 
-      res.json({
+      return res.json({
         message:
-          "Group deleted successfully",
+          "Group deleted successfully.",
       });
     } catch (error) {
       console.error(
@@ -563,8 +587,9 @@ router.delete(
         error
       );
 
-      res.status(500).json({
-        message: "Server error",
+      return res.status(500).json({
+        message:
+          "Could not delete group.",
       });
     }
   }
