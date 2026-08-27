@@ -1,13 +1,11 @@
-import React, {
-  useEffect,
-  useState,
-} from "react";
+import React, { useCallback, useEffect, useState } from "react";
 
 import {
   ActivityIndicator,
   Alert,
   FlatList,
   Image,
+  RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
@@ -15,601 +13,1070 @@ import {
   View,
 } from "react-native";
 
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { API_URL } from "../App";
 
-import {
-  getUsers,
-  getGroups,
-} from "../services/api";
+// =====================================================
+// HOME SCREEN
+// =====================================================
 
-import {
-  connectSocket,
-  disconnectSocket,
-} from "../services/socket";
-
-const HomeScreen = ({
-  navigation,
-}) => {
-  const [currentUser, setCurrentUser] =
-    useState(null);
-
+export default function HomeScreen({
+  currentUser,
+  onLogout,
+}) {
   const [users, setUsers] = useState([]);
   const [groups, setGroups] = useState([]);
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [loadingGroups, setLoadingGroups] = useState(true);
 
-  // =====================================================
-  // LOAD CURRENT USER
-  // =====================================================
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadUser();
-  }, []);
+  // ===================================================
+  // LOAD USERS
+  // ===================================================
 
-  const loadUser = async () => {
+  const loadUsers = async () => {
     try {
-      const savedUser =
-        await AsyncStorage.getItem(
-          "currentUser"
-        );
+      setLoadingUsers(true);
 
-      if (!savedUser) {
-        navigation.replace("Login");
-        return;
+      const response = await fetch(
+        `${API_URL}/api/users`
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Could not load users"
+        );
       }
 
-      const user =
-        JSON.parse(savedUser);
+      if (Array.isArray(data)) {
+        // Don't show current user
+        const otherUsers = data.filter(
+          (user) =>
+            String(user?._id) !==
+            String(currentUser?._id)
+        );
 
-      setCurrentUser(user);
-
-      connectSocket(user._id);
-
-      await loadData(user._id);
+        setUsers(otherUsers);
+      } else {
+        setUsers([]);
+      }
     } catch (error) {
       console.error(
-        "Load user error:",
+        "Users error:",
         error
       );
 
       Alert.alert(
         "Error",
-        "Could not load your account."
-      );
-    }
-  };
-
-  // =====================================================
-  // LOAD USERS + GROUPS
-  // =====================================================
-
-  const loadData = async (userId) => {
-    try {
-      setLoading(true);
-
-      const [
-        usersData,
-        groupsData,
-      ] = await Promise.all([
-        getUsers(),
-        getGroups(userId),
-      ]);
-
-      setUsers(
-        Array.isArray(usersData)
-          ? usersData
-          : []
+        "Could not load users."
       );
 
-      setGroups(
-        Array.isArray(groupsData)
-          ? groupsData
-          : []
-      );
-    } catch (error) {
-      console.error(
-        "Load data error:",
-        error
-      );
-
-      Alert.alert(
-        "Connection Error",
-        "Could not connect to the server."
-      );
+      setUsers([]);
     } finally {
-      setLoading(false);
+      setLoadingUsers(false);
     }
   };
 
-  // =====================================================
-  // LOGOUT
-  // =====================================================
+  // ===================================================
+  // LOAD GROUPS
+  // ===================================================
 
-  const logout = async () => {
+  const loadGroups = async () => {
+    if (!currentUser?._id) {
+      return;
+    }
+
     try {
-      disconnectSocket();
+      setLoadingGroups(true);
 
-      await AsyncStorage.removeItem(
-        "currentUser"
+      const response = await fetch(
+        `${API_URL}/api/groups/user/${currentUser._id}`
       );
 
-      navigation.replace("Login");
-    } catch (error) {
-      console.error(
-        "Logout error:",
-        error
-      );
-    }
-  };
+      const data = await response.json();
 
-  // =====================================================
-  // AVATAR
-  // =====================================================
-
-  const getAvatar = (user) => {
-    if (
-      user?.profilePhoto
-    ) {
-      if (
-        user.profilePhoto.startsWith(
-          "http"
-        )
-      ) {
-        return user.profilePhoto;
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+            "Could not load groups"
+        );
       }
 
-      return `https://kura-jnzv.onrender.com${user.profilePhoto}`;
-    }
+      setGroups(
+        Array.isArray(data)
+          ? data
+          : []
+      );
+    } catch (error) {
+      console.error(
+        "Groups error:",
+        error
+      );
 
-    return null;
+      setGroups([]);
+    } finally {
+      setLoadingGroups(false);
+    }
   };
 
-  // =====================================================
-  // USER ITEM
-  // =====================================================
+  // ===================================================
+  // INITIAL LOAD
+  // ===================================================
 
-  const renderUser = ({
-    item,
-  }) => {
-    if (
-      String(item._id) ===
-      String(currentUser?._id)
-    ) {
-      return null;
+  useEffect(() => {
+    loadUsers();
+    loadGroups();
+  }, [currentUser?._id]);
+
+  // ===================================================
+  // REFRESH
+  // ===================================================
+
+  const onRefresh = useCallback(
+    async () => {
+      setRefreshing(true);
+
+      await Promise.all([
+        loadUsers(),
+        loadGroups(),
+      ]);
+
+      setRefreshing(false);
+    },
+    [currentUser?._id]
+  );
+
+  // ===================================================
+  // USER HELPERS
+  // ===================================================
+
+  const getUserName = (user) => {
+    if (!user) {
+      return "User";
     }
 
-    const photo =
-      getAvatar(item);
+    return (
+      user.name ||
+      user.username ||
+      "User"
+    );
+  };
+
+  const getUserInitial = (user) => {
+    const name = getUserName(user);
+
+    return name
+      .charAt(0)
+      .toUpperCase();
+  };
+
+  // ===================================================
+  // PHOTO URL
+  // ===================================================
+
+  const getPhotoUrl = (user) => {
+    if (
+      !user ||
+      typeof user !== "object"
+    ) {
+      return "";
+    }
+
+    if (!user.profilePhoto) {
+      return "";
+    }
+
+    if (
+      user.profilePhoto.startsWith(
+        "http://"
+      ) ||
+      user.profilePhoto.startsWith(
+        "https://"
+      )
+    ) {
+      return user.profilePhoto;
+    }
+
+    return `${API_URL}${user.profilePhoto}`;
+  };
+
+  // ===================================================
+  // USER AVATAR
+  // ===================================================
+
+  const UserAvatar = ({
+    user,
+    group = false,
+  }) => {
+    if (group) {
+      return (
+        <View
+          style={[
+            styles.avatar,
+            styles.groupAvatar,
+          ]}
+        >
+          <Text style={styles.groupEmoji}>
+            👥
+          </Text>
+        </View>
+      );
+    }
+
+    const photo = getPhotoUrl(user);
 
     return (
-      <TouchableOpacity
-        style={styles.chatItem}
-        onPress={() =>
-          navigation.navigate(
-            "PrivateChat",
-            {
-              user: item,
-              currentUser,
-            }
-          )
-        }
-      >
+      <View style={styles.avatar}>
         {photo ? (
           <Image
             source={{
               uri: photo,
             }}
-            style={styles.avatar}
+            style={styles.avatarImage}
           />
         ) : (
-          <View
-            style={styles.avatarPlaceholder}
-          >
-            <Text style={styles.avatarText}>
-              {(
-                item.name ||
-                item.username ||
-                "U"
-              )
-                .charAt(0)
-                .toUpperCase()}
-            </Text>
-          </View>
+          <Text style={styles.avatarText}>
+            {getUserInitial(user)}
+          </Text>
         )}
-
-        <View
-          style={
-            styles.chatItemContent
-          }
-        >
-          <Text
-            style={styles.chatName}
-          >
-            {item.name ||
-              item.username ||
-              "User"}
-          </Text>
-
-          <Text
-            style={styles.username}
-          >
-            @{item.username || "user"}
-          </Text>
-        </View>
-      </TouchableOpacity>
+      </View>
     );
   };
 
-  // =====================================================
-  // GROUP ITEM
-  // =====================================================
+  // ===================================================
+  // OPEN PRIVATE CHAT
+  // ===================================================
 
-  const renderGroup = ({
+  const openPrivateChat = (user) => {
+    console.log(
+      "Opening private chat:",
+      user
+    );
+
+    /*
+     * We will connect this to
+     * PrivateChatScreen next.
+     */
+
+    Alert.alert(
+      "Private Chat",
+      `Opening chat with ${getUserName(
+        user
+      )}`
+    );
+  };
+
+  // ===================================================
+  // OPEN GROUP CHAT
+  // ===================================================
+
+  const openGroupChat = (group) => {
+    console.log(
+      "Opening group chat:",
+      group
+    );
+
+    /*
+     * We will connect this to
+     * GroupChatScreen next.
+     */
+
+    Alert.alert(
+      "Group Chat",
+      `Opening ${group.name || "Group"}`
+    );
+  };
+
+  // ===================================================
+  // LOGOUT CONFIRMATION
+  // ===================================================
+
+  const confirmLogout = () => {
+    Alert.alert(
+      "Logout",
+      "Are you sure you want to logout?",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Logout",
+          style: "destructive",
+          onPress: onLogout,
+        },
+      ]
+    );
+  };
+
+  // ===================================================
+  // USER ITEM
+  // ===================================================
+
+  const renderUser = ({
     item,
   }) => {
     return (
       <TouchableOpacity
         style={styles.chatItem}
+        activeOpacity={0.7}
         onPress={() =>
-          navigation.navigate(
-            "GroupChat",
-            {
-              group: item,
-              currentUser,
-            }
-          )
+          openPrivateChat(item)
         }
       >
-        <View
-          style={styles.groupAvatar}
-        >
-          <Text style={styles.groupIcon}>
-            👥
-          </Text>
-        </View>
+        <UserAvatar user={item} />
 
-        <View
-          style={
-            styles.chatItemContent
-          }
-        >
+        <View style={styles.chatInfo}>
           <Text
             style={styles.chatName}
+            numberOfLines={1}
           >
-            {item.name || "Group"}
+            {getUserName(item)}
           </Text>
 
           <Text
-            style={styles.username}
+            style={styles.chatUsername}
+            numberOfLines={1}
           >
-            {Array.isArray(
-              item.members
-            )
-              ? item.members.length
-              : 0}{" "}
-            members
+            @{item.username || "user"}
           </Text>
         </View>
+
+        <Text style={styles.chevron}>
+          ›
+        </Text>
       </TouchableOpacity>
     );
   };
 
-  // =====================================================
-  // LOADING
-  // =====================================================
+  // ===================================================
+  // GROUP ITEM
+  // ===================================================
 
-  if (loading) {
+  const renderGroup = ({
+    item,
+  }) => {
+    const memberCount =
+      Array.isArray(item.members)
+        ? item.members.length
+        : 0;
+
+    return (
+      <TouchableOpacity
+        style={styles.chatItem}
+        activeOpacity={0.7}
+        onPress={() =>
+          openGroupChat(item)
+        }
+      >
+        <UserAvatar group />
+
+        <View style={styles.chatInfo}>
+          <Text
+            style={styles.chatName}
+            numberOfLines={1}
+          >
+            {item.name || "Group"}
+          </Text>
+
+          <Text style={styles.chatUsername}>
+            {memberCount}{" "}
+            {memberCount === 1
+              ? "member"
+              : "members"}
+          </Text>
+        </View>
+
+        <Text style={styles.chevron}>
+          ›
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  // ===================================================
+  // EMPTY USERS
+  // ===================================================
+
+  const renderEmptyUsers = () => {
+    if (loadingUsers) {
+      return null;
+    }
+
+    return (
+      <View style={styles.emptySection}>
+        <Text style={styles.emptyIcon}>
+          👤
+        </Text>
+
+        <Text style={styles.emptyTitle}>
+          No other users
+        </Text>
+
+        <Text style={styles.emptyText}>
+          Other registered users will
+          appear here.
+        </Text>
+      </View>
+    );
+  };
+
+  // ===================================================
+  // EMPTY GROUPS
+  // ===================================================
+
+  const renderEmptyGroups = () => {
+    if (loadingGroups) {
+      return null;
+    }
+
+    return (
+      <View style={styles.emptySection}>
+        <Text style={styles.emptyIcon}>
+          👥
+        </Text>
+
+        <Text style={styles.emptyTitle}>
+          No groups
+        </Text>
+
+        <Text style={styles.emptyText}>
+          Groups you belong to will
+          appear here.
+        </Text>
+      </View>
+    );
+  };
+
+  // ===================================================
+  // LOADING
+  // ===================================================
+
+  if (
+    loadingUsers &&
+    loadingGroups
+  ) {
     return (
       <SafeAreaView
-        style={styles.loading}
+        style={styles.safeArea}
       >
-        <ActivityIndicator
-          size="large"
-        />
-
-        <Text
-          style={
-            styles.loadingText
-          }
+        <View
+          style={styles.loadingContainer}
         >
-          Loading...
-        </Text>
+          <ActivityIndicator
+            size="large"
+            color="#007AFF"
+          />
+
+          <Text
+            style={styles.loadingText}
+          >
+            Loading Kura...
+          </Text>
+        </View>
       </SafeAreaView>
     );
   }
 
-  // =====================================================
-  // HOME
-  // =====================================================
+  // ===================================================
+  // MAIN
+  // ===================================================
 
   return (
-    <SafeAreaView
-      style={styles.container}
-    >
-      {/* HEADER */}
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* =============================================
+            HEADER
+        ============================================= */}
 
-      <View
-        style={styles.header}
-      >
-        <View>
-          <Text
-            style={styles.title}
-          >
-            Messages
-          </Text>
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.title}>
+              Messages
+            </Text>
 
-          <Text
-            style={styles.subtitle}
-          >
-            Welcome{" "}
-            {currentUser?.name ||
-              currentUser?.username ||
-              "User"}
-          </Text>
-        </View>
-
-        <TouchableOpacity
-          onPress={logout}
-          style={
-            styles.logoutButton
-          }
-        >
-          <Text
-            style={
-              styles.logoutText
-            }
-          >
-            Logout
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* PEOPLE */}
-
-      <View
-        style={styles.section}
-      >
-        <Text
-          style={styles.sectionTitle}
-        >
-          People
-        </Text>
-
-        {users.filter(
-          (user) =>
-            String(user._id) !==
-            String(
-              currentUser?._id
-            )
-        ).length === 0 ? (
-          <Text
-            style={
-              styles.emptyText
-            }
-          >
-            No other users yet.
-          </Text>
-        ) : (
-          <FlatList
-            data={users}
-            keyExtractor={(item) =>
-              String(item._id)
-            }
-            renderItem={
-              renderUser
-            }
-          />
-        )}
-      </View>
-
-      {/* GROUPS */}
-
-      <View
-        style={styles.section}
-      >
-        <View
-          style={
-            styles.sectionHeader
-          }
-        >
-          <Text
-            style={styles.sectionTitle}
-          >
-            Groups
-          </Text>
+            <Text style={styles.subtitle}>
+              Stay connected with your
+              friends
+            </Text>
+          </View>
 
           <TouchableOpacity
+            style={styles.profileButton}
+            onPress={confirmLogout}
+            activeOpacity={0.7}
+          >
+            <UserAvatar
+              user={currentUser}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* =============================================
+            CURRENT USER
+        ============================================= */}
+
+        <View
+          style={
+            styles.currentUserCard
+          }
+        >
+          <UserAvatar
+            user={currentUser}
+          />
+
+          <View
             style={
-              styles.createButton
-            }
-            onPress={() =>
-              navigation.navigate(
-                "CreateGroup",
-                {
-                  currentUser,
-                  users,
-                }
-              )
+              styles.currentUserInfo
             }
           >
             <Text
               style={
-                styles.createButtonText
+                styles.currentUserName
               }
             >
-              + Create
+              {getUserName(
+                currentUser
+              )}
+            </Text>
+
+            <Text
+              style={
+                styles.currentUserUsername
+              }
+            >
+              @
+              {currentUser.username ||
+                "user"}
+            </Text>
+          </View>
+
+          <View
+            style={styles.onlineContainer}
+          >
+            <View
+              style={styles.onlineDot}
+            />
+
+            <Text
+              style={styles.onlineText}
+            >
+              Online
+            </Text>
+          </View>
+        </View>
+
+        {/* =============================================
+            CONTENT
+        ============================================= */}
+
+        <FlatList
+          data={users}
+          keyExtractor={(item) =>
+            String(item._id)
+          }
+          renderItem={renderUser}
+          ListHeaderComponent={
+            <>
+              {/* PEOPLE */}
+
+              <View
+                style={styles.sectionHeader}
+              >
+                <Text
+                  style={
+                    styles.sectionTitle
+                  }
+                >
+                  People
+                </Text>
+
+                <Text
+                  style={
+                    styles.sectionCount
+                  }
+                >
+                  {users.length}
+                </Text>
+              </View>
+            </>
+          }
+          ListEmptyComponent={
+            renderEmptyUsers
+          }
+          ListFooterComponent={
+            <>
+              {/* =====================================
+                  GROUPS
+              ===================================== */}
+
+              <View
+                style={[
+                  styles.sectionHeader,
+                  styles.groupsHeader,
+                ]}
+              >
+                <Text
+                  style={
+                    styles.sectionTitle
+                  }
+                >
+                  Groups
+                </Text>
+
+                <Text
+                  style={
+                    styles.sectionCount
+                  }
+                >
+                  {groups.length}
+                </Text>
+              </View>
+
+              {loadingGroups ? (
+                <View
+                  style={
+                    styles.smallLoading
+                  }
+                >
+                  <ActivityIndicator
+                    size="small"
+                    color="#007AFF"
+                  />
+
+                  <Text
+                    style={
+                      styles.smallLoadingText
+                    }
+                  >
+                    Loading groups...
+                  </Text>
+                </View>
+              ) : groups.length ===
+                0 ? (
+                renderEmptyGroups()
+              ) : (
+                groups.map((group) => (
+                  <View
+                    key={String(
+                      group._id
+                    )}
+                  >
+                    {renderGroup({
+                      item: group,
+                    })}
+                  </View>
+                ))
+              )}
+
+              <View
+                style={
+                  styles.bottomSpace
+                }
+              />
+            </>
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
+          }
+          showsVerticalScrollIndicator={
+            false
+          }
+          contentContainerStyle={
+            styles.listContent
+          }
+        />
+
+        {/* =============================================
+            BOTTOM NAVIGATION
+        ============================================= */}
+
+        <View style={styles.bottomNav}>
+          <View
+            style={[
+              styles.navItem,
+              styles.activeNavItem,
+            ]}
+          >
+            <Text style={styles.navIcon}>
+              💬
+            </Text>
+
+            <Text
+              style={
+                styles.activeNavText
+              }
+            >
+              Chats
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.navItem}
+            onPress={() =>
+              Alert.alert(
+                "Coming Soon",
+                "Settings will be added soon."
+              )
+            }
+          >
+            <Text style={styles.navIcon}>
+              ⚙️
+            </Text>
+
+            <Text style={styles.navText}>
+              Settings
             </Text>
           </TouchableOpacity>
         </View>
-
-        {groups.length === 0 ? (
-          <Text
-            style={
-              styles.emptyText
-            }
-          >
-            No groups yet.
-          </Text>
-        ) : (
-          <FlatList
-            data={groups}
-            keyExtractor={(item) =>
-              String(item._id)
-            }
-            renderItem={
-              renderGroup
-            }
-          />
-        )}
       </View>
     </SafeAreaView>
   );
-};
-
-export default HomeScreen;
+}
 
 // =====================================================
 // STYLES
 // =====================================================
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: "#ffffff",
+    backgroundColor: "#F7F8FA",
   },
 
-  loading: {
+  container: {
     flex: 1,
-    alignItems: "center",
+    backgroundColor: "#F7F8FA",
+  },
+
+  // ================================================
+  // LOADING
+  // ================================================
+
+  loadingContainer: {
+    flex: 1,
     justifyContent: "center",
-    backgroundColor: "#ffffff",
+    alignItems: "center",
+    backgroundColor: "#F7F8FA",
   },
 
   loadingText: {
-    marginTop: 10,
+    marginTop: 12,
     fontSize: 16,
+    color: "#666",
   },
+
+  smallLoading: {
+    paddingVertical: 20,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  smallLoadingText: {
+    marginLeft: 10,
+    fontSize: 14,
+    color: "#777",
+  },
+
+  // ================================================
+  // HEADER
+  // ================================================
 
   header: {
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingTop: 12,
+    paddingBottom: 16,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: 1,
-    borderBottomColor: "#eeeeee",
+    backgroundColor: "#FFFFFF",
   },
 
   title: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: "700",
+    color: "#111827",
   },
 
   subtitle: {
-    marginTop: 4,
-    color: "#777777",
+    marginTop: 3,
+    fontSize: 14,
+    color: "#8A8F98",
   },
 
-  logoutButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  profileButton: {
+    padding: 2,
   },
 
-  logoutText: {
-    color: "#e53935",
+  // ================================================
+  // CURRENT USER
+  // ================================================
+
+  currentUserCard: {
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 8,
+    padding: 14,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+
+    elevation: 2,
+  },
+
+  currentUserInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+
+  currentUserName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#17191C",
+  },
+
+  currentUserUsername: {
+    marginTop: 2,
+    fontSize: 13,
+    color: "#858A91",
+  },
+
+  onlineContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  onlineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#34C759",
+    marginRight: 5,
+  },
+
+  onlineText: {
+    fontSize: 12,
+    color: "#34C759",
     fontWeight: "600",
   },
 
-  section: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
+  // ================================================
+  // SECTIONS
+  // ================================================
 
   sectionHeader: {
+    marginTop: 18,
+    marginBottom: 8,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+  },
+
+  groupsHeader: {
+    marginTop: 28,
   },
 
   sectionTitle: {
     fontSize: 18,
     fontWeight: "700",
-    marginBottom: 10,
+    color: "#20242A",
   },
 
-  createButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: "#111111",
-  },
-
-  createButtonText: {
-    color: "#ffffff",
-    fontWeight: "600",
-  },
-
-  chatItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eeeeee",
-  },
-
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-  },
-
-  avatarPlaceholder: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#dddddd",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  avatarText: {
-    fontSize: 20,
+  sectionCount: {
+    marginLeft: 8,
+    minWidth: 24,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    textAlign: "center",
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#E9F2FF",
+    color: "#007AFF",
+    fontSize: 12,
     fontWeight: "700",
   },
 
-  groupAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#eeeeee",
+  // ================================================
+  // CHAT ITEM
+  // ================================================
+
+  chatItem: {
+    marginHorizontal: 16,
+    marginVertical: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1,
+    },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+
+    elevation: 1,
   },
 
-  groupIcon: {
-    fontSize: 24,
-  },
-
-  chatItemContent: {
-    marginLeft: 14,
+  chatInfo: {
     flex: 1,
+    marginLeft: 12,
   },
 
   chatName: {
     fontSize: 16,
     fontWeight: "600",
+    color: "#181B1F",
   },
 
-  username: {
+  chatUsername: {
     marginTop: 3,
-    color: "#777777",
     fontSize: 13,
+    color: "#858A91",
+  },
+
+  chevron: {
+    marginLeft: 8,
+    fontSize: 28,
+    lineHeight: 28,
+    color: "#B4B8BE",
+  },
+
+  // ================================================
+  // AVATAR
+  // ================================================
+
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#E9EEF5",
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+
+  avatarImage: {
+    width: "100%",
+    height: "100%",
+  },
+
+  avatarText: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#4B5563",
+  },
+
+  groupAvatar: {
+    backgroundColor: "#E8F1FF",
+  },
+
+  groupEmoji: {
+    fontSize: 24,
+  },
+
+  // ================================================
+  // EMPTY
+  // ================================================
+
+  emptySection: {
+    marginHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 10,
+    padding: 25,
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+  },
+
+  emptyIcon: {
+    fontSize: 30,
+    marginBottom: 8,
+  },
+
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#30343A",
   },
 
   emptyText: {
-    color: "#888888",
-    paddingVertical: 10,
+    marginTop: 5,
+    fontSize: 13,
+    color: "#8A8F98",
+    textAlign: "center",
+  },
+
+  // ================================================
+  // LIST
+  // ================================================
+
+  listContent: {
+    paddingBottom: 10,
+  },
+
+  bottomSpace: {
+    height: 20,
+  },
+
+  // ================================================
+  // BOTTOM NAV
+  // ================================================
+
+  bottomNav: {
+    height: 70,
+    paddingBottom: 8,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: "#E8E9EB",
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center",
+  },
+
+  navItem: {
+    flex: 1,
+    height: 60,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  activeNavItem: {
+    opacity: 1,
+  },
+
+  navIcon: {
+    fontSize: 22,
+    marginBottom: 3,
+  },
+
+  navText: {
+    fontSize: 12,
+    color: "#8A8F98",
+  },
+
+  activeNavText: {
+    fontSize: 12,
+    color: "#007AFF",
+    fontWeight: "700",
   },
 });
