@@ -1,4 +1,15 @@
 import { API_URL } from "../config";
+import * as FileSystem from "expo-file-system/legacy";
+
+// =====================================================
+// CLOUDINARY CONFIG
+// =====================================================
+
+const CLOUDINARY_CLOUD_NAME = "undnmzf1";
+const CLOUDINARY_UPLOAD_PRESET = "kura_mobile";
+
+const CLOUDINARY_UPLOAD_URL =
+  `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`;
 
 // =====================================================
 // GENERIC API REQUEST
@@ -6,14 +17,17 @@ import { API_URL } from "../config";
 
 const request = async (endpoint, options = {}) => {
   try {
-    const response = await fetch(`${API_URL}${endpoint}`, {
-      ...options,
+    const response = await fetch(
+      `${API_URL}${endpoint}`,
+      {
+        ...options,
 
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers || {}),
-      },
-    });
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {}),
+        },
+      }
+    );
 
     const text = await response.text();
 
@@ -22,7 +36,10 @@ const request = async (endpoint, options = {}) => {
     try {
       data = text ? JSON.parse(text) : {};
     } catch (error) {
-      console.error("Invalid JSON response:", text);
+      console.error(
+        "Invalid JSON response:",
+        text
+      );
 
       throw new Error(
         "Server returned an invalid response."
@@ -31,13 +48,218 @@ const request = async (endpoint, options = {}) => {
 
     if (!response.ok) {
       throw new Error(
-        data?.message || "Something went wrong."
+        data?.message ||
+          "Something went wrong."
       );
     }
 
     return data;
   } catch (error) {
-    console.error(`API ${endpoint}:`, error);
+    console.error(
+      `API ${endpoint}:`,
+      error
+    );
+
+    throw error;
+  }
+};
+
+// =====================================================
+// CLOUDINARY UPLOAD
+// =====================================================
+//
+// This function is used for:
+//
+// 1. Profile photos
+// 2. Private message photos
+// 3. Group message photos
+//
+// IMPORTANT:
+// No FormData is used here.
+//
+// Expo FileSystem uploads the local file
+// directly to Cloudinary.
+//
+// =====================================================
+
+const uploadToCloudinary = async (
+  uri,
+  folder,
+  mimeType = "image/jpeg"
+) => {
+  try {
+    if (!uri) {
+      throw new Error(
+        "Image URI is missing."
+      );
+    }
+
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "CLOUDINARY UPLOAD"
+    );
+
+    console.log(
+      "URI:",
+      uri
+    );
+
+    console.log(
+      "Folder:",
+      folder
+    );
+
+    console.log(
+      "MIME:",
+      mimeType
+    );
+
+    console.log(
+      "Cloud name:",
+      CLOUDINARY_CLOUD_NAME
+    );
+
+    console.log(
+      "Upload preset:",
+      CLOUDINARY_UPLOAD_PRESET
+    );
+
+    console.log(
+      "================================="
+    );
+
+    // -------------------------------------------------
+    // Upload directly to Cloudinary
+    // -------------------------------------------------
+
+    const result =
+      await FileSystem.uploadAsync(
+        CLOUDINARY_UPLOAD_URL,
+        uri,
+        {
+          httpMethod: "POST",
+
+          uploadType:
+            FileSystem.FileSystemUploadType.MULTIPART,
+
+          fieldName: "file",
+
+          mimeType:
+            mimeType || "image/jpeg",
+
+          parameters: {
+            upload_preset:
+              CLOUDINARY_UPLOAD_PRESET,
+
+            folder: folder,
+          },
+        }
+      );
+
+    console.log(
+      "Cloudinary HTTP status:",
+      result.status
+    );
+
+    console.log(
+      "Cloudinary response:",
+      result.body
+    );
+
+    // -------------------------------------------------
+    // Check response
+    // -------------------------------------------------
+
+    if (
+      result.status < 200 ||
+      result.status >= 300
+    ) {
+      let errorMessage =
+        "Cloudinary upload failed.";
+
+      try {
+        const errorData =
+          JSON.parse(result.body);
+
+        errorMessage =
+          errorData?.error?.message ||
+          errorMessage;
+      } catch (error) {
+        // Ignore JSON parsing error
+      }
+
+      throw new Error(
+        errorMessage
+      );
+    }
+
+    // -------------------------------------------------
+    // Parse Cloudinary response
+    // -------------------------------------------------
+
+    let data = {};
+
+    try {
+      data =
+        result.body
+          ? JSON.parse(result.body)
+          : {};
+    } catch (error) {
+      console.error(
+        "Cloudinary JSON error:",
+        result.body
+      );
+
+      throw new Error(
+        "Invalid response from Cloudinary."
+      );
+    }
+
+    // -------------------------------------------------
+    // Get secure URL
+    // -------------------------------------------------
+
+    const imageUrl =
+      data?.secure_url;
+
+    if (!imageUrl) {
+      console.error(
+        "Cloudinary did not return secure_url:",
+        data
+      );
+
+      throw new Error(
+        "Cloudinary did not return an image URL."
+      );
+    }
+
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "CLOUDINARY UPLOAD SUCCESS"
+    );
+
+    console.log(
+      "Image URL:",
+      imageUrl
+    );
+
+    console.log(
+      "================================="
+    );
+
+    return imageUrl;
+  } catch (error) {
+    console.error(
+      "Cloudinary upload error:",
+      error
+    );
+
     throw error;
   }
 };
@@ -52,12 +274,25 @@ const request = async (endpoint, options = {}) => {
 // -----------------------------------------------------
 
 export const getUsers = () => {
-  return request("/api/users");
+  return request(
+    "/api/users"
+  );
 };
 
 // -----------------------------------------------------
 // REGISTER USER
 // POST /api/users/register
+// -----------------------------------------------------
+//
+// Profile photo is uploaded directly to:
+//
+// Cloudinary
+//     ↓
+// kura/profiles
+//
+// Then only the Cloudinary URL is sent
+// to your Node.js server.
+//
 // -----------------------------------------------------
 
 export const registerUser = async ({
@@ -67,147 +302,90 @@ export const registerUser = async ({
   profilePhoto,
 }) => {
   try {
-    console.log("========== REGISTER ==========");
-    console.log("Name:", name);
-    console.log("Username:", username);
-    console.log("Has photo:", !!profilePhoto);
+    console.log(
+      "================================="
+    );
 
-    let cloudinaryUrl = "";
+    console.log(
+      "REGISTER USER"
+    );
+
+    console.log(
+      "Name:",
+      name
+    );
+
+    console.log(
+      "Username:",
+      username
+    );
+
+    console.log(
+      "Has profile photo:",
+      !!profilePhoto
+    );
+
+    console.log(
+      "================================="
+    );
+
+    let profilePhotoUrl = "";
 
     // =================================================
-    // UPLOAD PROFILE PHOTO DIRECTLY TO CLOUDINARY
+    // UPLOAD PROFILE PHOTO
     // =================================================
 
-    if (profilePhoto?.uri) {
-      console.log("Uploading profile photo...");
-
-      const uri = profilePhoto.uri;
-
-      const fileName =
-        profilePhoto.fileName ||
-        `profile-${Date.now()}.jpg`;
-
-      const mimeType =
-        profilePhoto.mimeType ||
-        "image/jpeg";
-
-      const cloudName =
-        "undnmzf1";
-
-      const uploadPreset =
-        "kura_mobile";
-
-      const cloudinaryForm =
-        new FormData();
-
-      cloudinaryForm.append(
-        "file",
-        {
-          uri: uri,
-          name: fileName,
-          type: mimeType,
-        }
-      );
-
-      cloudinaryForm.append(
-        "upload_preset",
-        uploadPreset
-      );
-
-      // This makes the image go into:
-      //
-      // kura/profiles/...
-      //
-      cloudinaryForm.append(
-        "folder",
-        "kura/profiles"
-      );
-
-      const cloudinaryResponse =
-        await fetch(
-          `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
-          {
-            method: "POST",
-            body: cloudinaryForm,
-          }
+    if (
+      profilePhoto &&
+      profilePhoto.uri
+    ) {
+      profilePhotoUrl =
+        await uploadToCloudinary(
+          profilePhoto.uri,
+          "kura/profiles",
+          profilePhoto.mimeType ||
+            "image/jpeg"
         );
-
-      const cloudinaryText =
-        await cloudinaryResponse.text();
-
-      console.log(
-        "Cloudinary status:",
-        cloudinaryResponse.status
-      );
-
-      console.log(
-        "Cloudinary response:",
-        cloudinaryText
-      );
-
-      let cloudinaryData = {};
-
-      try {
-        cloudinaryData =
-          cloudinaryText
-            ? JSON.parse(cloudinaryText)
-            : {};
-      } catch {
-        throw new Error(
-          "Invalid Cloudinary response."
-        );
-      }
-
-      if (!cloudinaryResponse.ok) {
-        throw new Error(
-          cloudinaryData?.error?.message ||
-            "Profile photo upload failed."
-        );
-      }
-
-      cloudinaryUrl =
-        cloudinaryData.secure_url;
-
-      if (!cloudinaryUrl) {
-        throw new Error(
-          "Cloudinary did not return an image URL."
-        );
-      }
-
-      console.log(
-        "Profile Cloudinary URL:",
-        cloudinaryUrl
-      );
     }
 
     // =================================================
-    // REGISTER USER
+    // SEND USER TO SERVER
     // =================================================
 
-    const response = await fetch(
-      `${API_URL}/api/users/register`,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type":
-            "application/json",
-        },
-
-        body: JSON.stringify({
-          name: name.trim(),
-          username: username.trim(),
-          password: password,
-          profilePhoto: cloudinaryUrl,
-        }),
-      }
+    console.log(
+      "Sending user information to server..."
     );
+
+    const response =
+      await fetch(
+        `${API_URL}/api/users/register`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            name: name.trim(),
+
+            username:
+              username.trim(),
+
+            password,
+
+            profilePhoto:
+              profilePhotoUrl,
+          }),
+        }
+      );
 
     const text =
       await response.text();
 
     console.log(
-      "Registration status:",
+      "Registration HTTP status:",
       response.status
     );
 
@@ -222,7 +400,7 @@ export const registerUser = async ({
       data = text
         ? JSON.parse(text)
         : {};
-    } catch {
+    } catch (error) {
       throw new Error(
         "Invalid server response."
       );
@@ -236,7 +414,20 @@ export const registerUser = async ({
     }
 
     console.log(
-      "Registration successful."
+      "================================="
+    );
+
+    console.log(
+      "REGISTRATION SUCCESSFUL"
+    );
+
+    console.log(
+      "Profile URL:",
+      profilePhotoUrl
+    );
+
+    console.log(
+      "================================="
     );
 
     return data;
@@ -256,10 +447,11 @@ export const registerUser = async ({
 
 // -----------------------------------------------------
 // GET GROUPS FOR USER
-// GET /api/groups/user/:userId
 // -----------------------------------------------------
 
-export const getGroups = (userId) => {
+export const getGroups = (
+  userId
+) => {
   return request(
     `/api/groups/user/${userId}`
   );
@@ -267,7 +459,6 @@ export const getGroups = (userId) => {
 
 // -----------------------------------------------------
 // CREATE GROUP
-// POST /api/groups
 // -----------------------------------------------------
 
 export const createGroup = ({
@@ -275,15 +466,18 @@ export const createGroup = ({
   admin,
   members,
 }) => {
-  return request("/api/groups", {
-    method: "POST",
+  return request(
+    "/api/groups",
+    {
+      method: "POST",
 
-    body: JSON.stringify({
-      name,
-      admin,
-      members,
-    }),
-  });
+      body: JSON.stringify({
+        name,
+        admin,
+        members,
+      }),
+    }
+  );
 };
 
 // =====================================================
@@ -374,36 +568,34 @@ export const sendGroupMessage = ({
 };
 
 // =====================================================
-// UPLOAD IMAGE
+// UPLOAD MESSAGE IMAGE
 // =====================================================
 //
 // Used for:
-// - Private message images
-// - Group message images
 //
-// React Native
-//      ↓
-// FormData
-//      ↓
-// Express
-//      ↓
-// Multer
-//      ↓
+// Private message image
+// Group message image
+//
+// Upload:
+//
+// iOS
+//   ↓
 // Cloudinary
-//      ↓
-// Cloudinary URL
-//
-// Backend should save images to:
+//   ↓
 // kura/messages
+//   ↓
+// secure_url
 //
-// IMPORTANT:
-// Do NOT manually set Content-Type.
+// No FormData is used.
+//
 // =====================================================
 
-export const uploadImage = async (image) => {
+export const uploadImage = async (
+  image
+) => {
   try {
     // -------------------------------------------------
-    // VALIDATE
+    // Validate
     // -------------------------------------------------
 
     if (!image) {
@@ -418,155 +610,24 @@ export const uploadImage = async (image) => {
       );
     }
 
-    const uri = image.uri;
-
     // -------------------------------------------------
-    // FILE NAME
-    // -------------------------------------------------
-
-    let fileName = image.fileName;
-
-    if (!fileName) {
-      fileName =
-        uri.split("/").pop() ||
-        `message-${Date.now()}.jpg`;
-    }
-
-    // -------------------------------------------------
-    // MIME TYPE
-    // -------------------------------------------------
-
-    let mimeType = image.mimeType;
-
-    if (!mimeType) {
-      mimeType = "image/jpeg";
-    }
-
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "UPLOADING MESSAGE IMAGE"
-    );
-
-    console.log(
-      "URI:",
-      uri
-    );
-
-    console.log(
-      "File name:",
-      fileName
-    );
-
-    console.log(
-      "MIME type:",
-      mimeType
-    );
-
-    console.log(
-      "Upload URL:",
-      `${API_URL}/api/messages/upload-image`
-    );
-
-    console.log(
-      "================================="
-    );
-
-    // -------------------------------------------------
-    // CREATE FORMDATA
-    // -------------------------------------------------
-
-    const formData = new FormData();
-
-    formData.append("image", {
-      uri: uri,
-      name: fileName,
-      type: mimeType,
-    });
-
-    // -------------------------------------------------
-    // UPLOAD
-    // -------------------------------------------------
-
-    const response = await fetch(
-      `${API_URL}/api/messages/upload-image`,
-      {
-        method: "POST",
-        body: formData,
-      }
-    );
-
-    // -------------------------------------------------
-    // RESPONSE
-    // -------------------------------------------------
-
-    const responseText =
-      await response.text();
-
-    console.log(
-      "Upload status:",
-      response.status
-    );
-
-    console.log(
-      "Upload response:",
-      responseText
-    );
-
-    let data = {};
-
-    try {
-      data = responseText
-        ? JSON.parse(responseText)
-        : {};
-    } catch (error) {
-      throw new Error(
-        "Server returned an invalid upload response."
-      );
-    }
-
-    if (!response.ok) {
-      throw new Error(
-        data?.message ||
-          "Image upload failed."
-      );
-    }
-
-    // -------------------------------------------------
-    // GET CLOUDINARY URL
+    // Upload directly to Cloudinary
     // -------------------------------------------------
 
     const imageUrl =
-      data?.imageUrl ||
-      data?.url ||
-      data?.secure_url ||
-      data?.path;
-
-    if (!imageUrl) {
-      console.error(
-        "Upload response did not contain image URL:",
-        data
+      await uploadToCloudinary(
+        image.uri,
+        "kura/messages",
+        image.mimeType ||
+          "image/jpeg"
       );
-
-      throw new Error(
-        "Server did not return an image URL."
-      );
-    }
 
     console.log(
-      "================================="
+      "Message image uploaded:"
     );
 
     console.log(
-      "CLOUDINARY IMAGE URL:"
-    );
-
-    console.log(imageUrl);
-
-    console.log(
-      "================================="
+      imageUrl
     );
 
     return imageUrl;
@@ -584,24 +645,27 @@ export const uploadImage = async (image) => {
 // SERVER HEALTH CHECK
 // =====================================================
 
-export const checkServer = async () => {
-  try {
-    const response = await fetch(
-      `${API_URL}/`
-    );
+export const checkServer =
+  async () => {
+    try {
+      const response =
+        await fetch(
+          `${API_URL}/`
+        );
 
-    const data = await response.json();
+      const data =
+        await response.json();
 
-    return data;
-  } catch (error) {
-    console.error(
-      "Server health check error:",
-      error
-    );
+      return data;
+    } catch (error) {
+      console.error(
+        "Server health check error:",
+        error
+      );
 
-    throw error;
-  }
-};
+      throw error;
+    }
+  };
 
 // =====================================================
 // DEFAULT EXPORT
